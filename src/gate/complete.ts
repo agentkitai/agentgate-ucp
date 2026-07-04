@@ -11,8 +11,10 @@
  *   d. Branch: approved → forward to the merchant; denied/pending → return a
  *      UCP `requires_escalation` Checkout carrying the AgentGate continue_url.
  *
- * Parking + webhook-driven resume of a pending approval is task #10; here a
- * pending decision just returns the escalation.
+ * When a {@link ParkedSessionStore} is provided (task #10), a `pending` decision
+ * also PARKS a row keyed by the AgentGate request.id so the decision webhook can
+ * later replay the completion. Without a store, `pending` just returns the
+ * escalation (task #9 behaviour).
  */
 import { randomUUID } from 'node:crypto';
 
@@ -20,6 +22,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 import { errorResult, extractHeaders, requireId, wrapCheckout } from '../mapping';
 import { MerchantClient, MerchantError } from '../merchant/client';
+import type { ParkedSessionStore } from '../store/parked';
 import type { Checkout } from '../types';
 import type { Gate } from './agentgate';
 import { flattenCheckout } from './flatten';
@@ -85,7 +88,8 @@ export async function gateCompleteCheckout(
   merchant: MerchantClient,
   gate: Gate,
   args: Record<string, unknown>,
-  ctx: CompleteGateContext = {}
+  ctx: CompleteGateContext = {},
+  store?: ParkedSessionStore | undefined
 ): Promise<CallToolResult> {
   let id: string;
   try {
@@ -129,10 +133,29 @@ export async function gateCompleteCheckout(
         return wrapCheckout(
           deniedCheckout(id, decision.reason, gate.continueUrl(decision.approvalId))
         );
-      case 'pending':
+      case 'pending': {
+        // Park the session so the decision webhook can resume it later. Store the
+        // authoritative payment payload + the pinned idempotency-key: the replay
+        // must reproduce THIS exact completion, not re-derive it.
+        if (store) {
+          const now = new Date().toISOString();
+          store.put({
+            approvalId: decision.approvalId,
+            checkoutId: id,
+            idempotencyKey,
+            mcpSessionId: ctx.mcpSessionId,
+            checkoutSnapshot: paymentPayload,
+            merchantBaseUrl: merchant.base,
+            status: 'pending',
+            orderResult: null,
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
         return wrapCheckout(
           pendingCheckout(id, decision.approvalId, gate.continueUrl(decision.approvalId))
         );
+      }
       default: {
         const exhaustive: never = decision;
         return errorResult(`Unknown gate decision: ${JSON.stringify(exhaustive)}`);

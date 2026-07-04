@@ -7,6 +7,7 @@ import type { Gate, GateContext, GateDecision } from '../src/gate/agentgate';
 import { gateCompleteCheckout } from '../src/gate/complete';
 import { createGateServer } from '../src/mcp/server';
 import { MerchantClient } from '../src/merchant/client';
+import { openParkedStore } from '../src/store/parked';
 import type { Checkout, CheckoutFacts } from '../src/types';
 
 /** Recording stub merchant. `getCheckout` returns the AUTHORITATIVE checkout. */
@@ -23,6 +24,7 @@ function makeStubMerchant(authoritative: Checkout): {
 } {
   const calls: MerchantCall[] = [];
   const stub = {
+    base: 'https://merchant.example',
     createCheckout(body: unknown, headers: MerchantCall['headers']) {
       calls.push({ method: 'createCheckout', body, headers });
       return Promise.resolve(authoritative);
@@ -211,6 +213,49 @@ describe('gateCompleteCheckout — authoritative totals + idempotency', () => {
     expect(res.isError).toBe(true);
     expect(mCalls).toHaveLength(0);
     expect(gCalls).toHaveLength(0);
+  });
+});
+
+describe('gateCompleteCheckout — pending parks a row (task #10)', () => {
+  it('puts a pending row with the approvalId/checkoutId/idempotency-key/snapshot', async () => {
+    const { merchant } = makeStubMerchant(MERCHANT_CHECKOUT);
+    const { gate } = makeStubGate({ status: 'pending', approvalId: 'req_park' });
+    const store = openParkedStore(':memory:');
+    const snapshot = { payment_data: { handler_id: 'mock_payment_handler' } };
+
+    const res = await gateCompleteCheckout(
+      merchant,
+      gate,
+      { meta: AGENT_META, id: 'co_9', checkout: snapshot },
+      { mcpSessionId: 'sess_42' },
+      store
+    );
+
+    // Escalation is still returned to the agent.
+    expect((res.structuredContent as { approval_id?: string }).approval_id).toBe('req_park');
+
+    const parked = store.get('req_park');
+    expect(parked).toBeDefined();
+    expect(parked?.checkoutId).toBe('co_9');
+    expect(parked?.idempotencyKey).toBe('key-abc'); // pinned from AGENT_META
+    expect(parked?.checkoutSnapshot).toEqual(snapshot);
+    expect(parked?.mcpSessionId).toBe('sess_42');
+    expect(parked?.merchantBaseUrl).toBe('https://merchant.example');
+    expect(parked?.status).toBe('pending');
+  });
+
+  it('without a store injected, pending behaves exactly as task #9 (no throw)', async () => {
+    const { merchant, calls } = makeStubMerchant(MERCHANT_CHECKOUT);
+    const { gate } = makeStubGate({ status: 'pending', approvalId: 'req_nostore' });
+
+    const res = await gateCompleteCheckout(merchant, gate, {
+      meta: AGENT_META,
+      id: 'co_9',
+      checkout: {},
+    });
+
+    expect(calls.some((c) => c.method === 'completeCheckout')).toBe(false);
+    expect((res.structuredContent as Checkout).status).toBe('requires_escalation');
   });
 });
 
