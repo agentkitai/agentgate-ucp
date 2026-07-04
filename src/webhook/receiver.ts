@@ -14,12 +14,35 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import type { MerchantClient } from '../merchant/client';
+import type { EvidenceRecorder } from '../observability/agentlens';
+import { recordGateEvent } from '../observability/agentlens';
+import type { Checkout } from '../types';
+
 import type { ParkedSessionStore } from '../store/parked';
 
 export interface WebhookDeps {
   store: ParkedSessionStore;
   merchant: MerchantClient;
   webhookSecret: string | undefined;
+  /** Optional AgentLens recorder — resume events chain onto the checkout's session. */
+  recorder?: EvidenceRecorder | undefined;
+}
+
+/** Marks every evidence event as originating from this adapter (the source of truth). */
+const EVIDENCE_SOURCE = 'agentgate-ucp';
+
+/** Best-effort order id from a completed merchant Checkout (top-level or nested). */
+function extractOrderId(checkout: unknown): string | undefined {
+  if (!checkout || typeof checkout !== 'object') return undefined;
+  const co = checkout as Checkout;
+  const top = co['order_id'];
+  if (typeof top === 'string' && top.length > 0) return top;
+  const order = co.order;
+  if (order && typeof order === 'object') {
+    const oid = (order as Record<string, unknown>)['id'];
+    if (typeof oid === 'string' && oid.length > 0) return oid;
+  }
+  return undefined;
 }
 
 /**
@@ -78,7 +101,7 @@ export async function handleDecisionWebhook(
   rawBody: string,
   signature: string | undefined
 ): Promise<WebhookResult> {
-  const { store, merchant, webhookSecret } = deps;
+  const { store, merchant, webhookSecret, recorder } = deps;
 
   // 1. Verify the HMAC signature. When no secret is configured we proceed in a
   //    clearly-signalled dev mode (the outcome enum lets the caller distinguish).
@@ -141,6 +164,17 @@ export async function handleDecisionWebhook(
     }
   }
 
+  // Resume events chain onto the SAME per-checkout session the completion opened,
+  // attributed to the original buying agent (fallback: anonymous).
+  const sessionId = `ucp_${row.checkoutId}`;
+  const agentId = row.agentId ?? 'ucp-anonymous';
+  const evidenceMetadata: Record<string, unknown> = {
+    checkoutId: row.checkoutId,
+    agentgateRequestId: requestId,
+    idempotencyKey: row.idempotencyKey,
+    source: EVIDENCE_SOURCE,
+  };
+
   // 4. Resolve. Replay uses the STORED snapshot + original idempotency-key so the
   //    merchant treats a retried delivery as the same request (idempotent).
   if (event === 'request.approved') {
@@ -149,6 +183,18 @@ export async function handleDecisionWebhook(
         idempotencyKey: row.idempotencyKey,
       });
       store.markStatus(requestId, 'approved_replayed', completed);
+      // Evidence: the parked order was replayed + placed after human approval.
+      recordGateEvent(recorder, {
+        sessionId,
+        agentId,
+        type: 'ucp.order.replayed',
+        data: {
+          agentgateRequestId: requestId,
+          orderId: extractOrderId(completed),
+          idempotencyKey: row.idempotencyKey,
+        },
+        metadata: evidenceMetadata,
+      });
       return { outcome: 'approved_replayed' };
     } catch (err) {
       store.markStatus(requestId, 'error');
@@ -158,6 +204,14 @@ export async function handleDecisionWebhook(
 
   if (event === 'request.denied') {
     store.markStatus(requestId, 'denied');
+    // Evidence: the parked order was denied at approval time.
+    recordGateEvent(recorder, {
+      sessionId,
+      agentId,
+      type: 'ucp.order.webhook_denied',
+      data: { agentgateRequestId: requestId },
+      metadata: evidenceMetadata,
+    });
     return { outcome: 'denied' };
   }
 

@@ -9,6 +9,7 @@ import { loadConfig } from './config';
 import { PolicyGate } from './gate/agentgate';
 import { createGateServer } from './mcp/server';
 import { MerchantClient } from './merchant/client';
+import { AgentLensRecorder } from './observability/agentlens';
 import { openParkedStore } from './store/parked';
 import { handleDecisionWebhook } from './webhook/receiver';
 
@@ -16,6 +17,12 @@ const config = loadConfig();
 const merchant = new MerchantClient(config.merchantUrl);
 const gate = new PolicyGate({ baseUrl: config.agentgateUrl, apiKey: config.agentgateApiKey });
 const store = openParkedStore(config.sqlitePath);
+// Best-effort, fail-open evidence sink. No-op when AGENTLENS_URL is unset.
+const recorder = new AgentLensRecorder({
+  url: config.agentlensUrl,
+  apiKey: config.agentlensApiKey,
+  agentToken: config.agentlensAgentToken,
+});
 
 type Bindings = { Bindings: HttpBindings };
 const app = new Hono<Bindings>();
@@ -35,7 +42,7 @@ app.get('/health', (c) => c.json({ ok: true, service: 'agentgate-ucp', version: 
  */
 async function handleMcp(c: Context<Bindings>): Promise<Response> {
   const { incoming, outgoing } = c.env;
-  const server = createGateServer({ merchant, gate, store });
+  const server = createGateServer({ merchant, gate, store, recorder });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   outgoing.on('close', () => {
     void transport.close();
@@ -65,7 +72,7 @@ app.post('/agentgate/webhook', async (c) => {
   const rawBody = await c.req.text();
   const signature = c.req.header('X-AgentGate-Signature');
   const result = await handleDecisionWebhook(
-    { store, merchant, webhookSecret: config.agentgateWebhookSecret },
+    { store, merchant, webhookSecret: config.agentgateWebhookSecret, recorder },
     rawBody,
     signature
   );

@@ -3,39 +3,42 @@
 # gate       : http://localhost:8787/mcp
 # agentgate  : http://localhost:4000
 ################################################################
-[2026-07-04 18:28:54.945] Connected. Gate exposes tools: create_checkout, get_checkout, update_checkout, complete_checkout, cancel_checkout
+[2026-07-04 19:01:09.693] Connected. Gate exposes tools: create_checkout, get_checkout, update_checkout, complete_checkout, cancel_checkout
 
 ================================================================
 SCENARIO A — OVER the spend policy (7000 minor > 5000) → approval loop
 ================================================================
-[2026-07-04 18:28:54.946] A1. create_checkout: 2 × bouquet_roses (@3500) = 7000 minor
-[2026-07-04 18:28:55.007]     created checkout 6a8a9766-917d-4c6e-a5d4-c7fac72b47ff (status=incomplete, total=7000 minor)
-[2026-07-04 18:28:55.007] A2. complete_checkout (idempotency-key=d50f6002-4088-4e2b-ad8f-2e21670ccf4a) — the agent tries to place the order
-[2026-07-04 18:28:55.024]     gate responded: status=requires_escalation, approval_id=Kj39OkJ0_1-Drb1400Cqj
-[2026-07-04 18:28:55.024]     ⏸  PARKED. Nobody is watching the agent — approval_id=Kj39OkJ0_1-Drb1400Cqj
-[2026-07-04 18:28:55.024]        continue_url=http://localhost:4000/requests/Kj39OkJ0_1-Drb1400Cqj
-[2026-07-04 18:28:55.024]        message: Purchase requires approval.
-[2026-07-04 18:28:55.034] A3. get_checkout before approval → status=incomplete (order not placed yet)
-[2026-07-04 18:28:55.034] A4. 🧑  A human opens AgentGate and taps "Approve"…
-[2026-07-04 18:28:55.079]    AgentGate request Kj39OkJ0_1-Drb1400Cqj → status=approved (decidedBy=demo:human-reviewer)
-[2026-07-04 18:28:55.079]     → AgentGate fires the decision webhook → the gate replays the completion
-[2026-07-04 18:28:55.079]       with the ORIGINAL idempotency-key.
-[2026-07-04 18:28:55.079] A5. Agent polls get_checkout until the order lands…
-[2026-07-04 18:28:55.088]     ✅ COMPLETED via webhook resume — checkout=6a8a9766-917d-4c6e-a5d4-c7fac72b47ff, order_id=ord_e6df1f8f-f19c-49f8-adb0-3fe08b4027c6
+[2026-07-04 19:01:09.694] A1. create_checkout: 2 × bouquet_roses (@3500) = 7000 minor
+[2026-07-04 19:01:09.753]     created checkout 25cb0c98-86fc-411e-bf3a-f087763927d4 (status=incomplete, total=7000 minor)
+[2026-07-04 19:01:09.753] A2. complete_checkout (idempotency-key=d1530ea2-65c6-46d0-a4f7-8ad8ac9b2688) — the agent tries to place the order
+[2026-07-04 19:01:09.769]     gate responded: status=requires_escalation, approval_id=8kfPAAmqGezHydu40p0LN
+[2026-07-04 19:01:09.769]     ⏸  PARKED. Nobody is watching the agent — approval_id=8kfPAAmqGezHydu40p0LN
+[2026-07-04 19:01:09.769]        continue_url=http://localhost:4000/requests/8kfPAAmqGezHydu40p0LN
+[2026-07-04 19:01:09.769]        message: Purchase requires approval.
+[2026-07-04 19:01:09.779] A3. get_checkout before approval → status=incomplete (order not placed yet)
+[2026-07-04 19:01:09.779] A4. 🧑  A human opens AgentGate and taps "Approve"…
+[2026-07-04 19:01:09.820]    AgentGate request 8kfPAAmqGezHydu40p0LN → status=approved (decidedBy=demo:human-reviewer)
+[2026-07-04 19:01:09.820]     → AgentGate fires the decision webhook → the gate replays the completion
+[2026-07-04 19:01:09.820]       with the ORIGINAL idempotency-key.
+[2026-07-04 19:01:09.820] A5. Agent polls get_checkout until the order lands…
+[2026-07-04 19:01:09.829]     ✅ COMPLETED via webhook resume — checkout=25cb0c98-86fc-411e-bf3a-f087763927d4, order_id=ord_f48bff5c-7ba9-41b9-a9c5-14ccf004d943
+[2026-07-04 19:01:09.829] A6. 🔎 Verify the tamper-evident AgentLens evidence chain for this checkout…
+[2026-07-04 19:01:09.829]     (the gate self-emitted received → decision → parked → replayed on ucp_25cb0c98-86fc-411e-bf3a-f087763927d4)
+[2026-07-04 19:01:09.861]    ✅ evidence chain verified — 4 events, e1ed3dc865c0…ab72c960ee33
 
    SCENARIO A RESULT: PASS — parked over-threshold buy completed only after human approval.
-   order_id = ord_e6df1f8f-f19c-49f8-adb0-3fe08b4027c6
+   order_id = ord_f48bff5c-7ba9-41b9-a9c5-14ccf004d943
 
 ================================================================
 SCENARIO B — UNDER the spend policy (3500 minor < 5000) → auto-approve
 ================================================================
-[2026-07-04 18:28:55.088] B1. create_checkout: 1 × bouquet_roses (@3500) = 3500 minor
-[2026-07-04 18:28:55.103]     created checkout d84cbd41-f7d6-409f-b83d-a6fd37749683 (status=incomplete, total=3500 minor)
-[2026-07-04 18:28:55.103] B2. complete_checkout (idempotency-key=c2555d7d-eecb-4578-80eb-ab8c384adb99)
-[2026-07-04 18:28:55.139]     gate responded: status=completed, order_id=ord_abecfa2c-319a-4658-bce5-fba5482e1aa0
+[2026-07-04 19:01:09.861] B1. create_checkout: 1 × bouquet_roses (@3500) = 3500 minor
+[2026-07-04 19:01:09.877]     created checkout dc96b299-2d55-46ac-bc6d-37066ed59242 (status=incomplete, total=3500 minor)
+[2026-07-04 19:01:09.877] B2. complete_checkout (idempotency-key=5d462c10-16e9-42ce-a19e-396b502a2d11)
+[2026-07-04 19:01:09.914]     gate responded: status=completed, order_id=ord_5a5c3f94-9ec0-4bfb-8840-244aae960d32
 
    SCENARIO B RESULT: PASS — under-threshold buy completed immediately, no human in the loop.
-   order_id = ord_abecfa2c-319a-4658-bce5-fba5482e1aa0
+   order_id = ord_5a5c3f94-9ec0-4bfb-8840-244aae960d32
 
 ################################################################
 # ✅ DEMO PASSED — both scenarios asserted green.

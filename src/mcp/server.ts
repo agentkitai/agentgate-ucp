@@ -19,6 +19,7 @@ import type { Gate } from '../gate/agentgate';
 import { gateCompleteCheckout } from '../gate/complete';
 import { dispatchToolCall, isCheckoutToolName, TOOL_DEFINITIONS } from '../mapping';
 import type { MerchantClient } from '../merchant/client';
+import type { EvidenceRecorder } from '../observability/agentlens';
 import type { ParkedSessionStore } from '../store/parked';
 
 export interface GateServerDeps {
@@ -27,13 +28,15 @@ export interface GateServerDeps {
   gate?: Gate | undefined;
   /** Optional parked-session store. When present, a `pending` decision is parked (task #10). */
   store?: ParkedSessionStore | undefined;
+  /** Optional AgentLens recorder. When present, the gate self-emits per-checkout evidence. */
+  recorder?: EvidenceRecorder | undefined;
 }
 
 /**
  * Build a fresh MCP `Server` wired to the given merchant client (and optional
  * gate). In the StreamableHTTP stateless setup one of these is created per request.
  */
-export function createGateServer({ merchant, gate, store }: GateServerDeps): Server {
+export function createGateServer({ merchant, gate, store, recorder }: GateServerDeps): Server {
   const server = new Server(
     { name: 'agentgate-ucp', version: '0.1.0' },
     { capabilities: { tools: {} } }
@@ -52,7 +55,7 @@ export function createGateServer({ merchant, gate, store }: GateServerDeps): Ser
       throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
     }
     if (name === 'complete_checkout' && gate) {
-      return gateCompleteCheckout(merchant, gate, args ?? {}, {}, store);
+      return gateCompleteCheckout(merchant, gate, args ?? {}, {}, store, recorder);
     }
     return dispatchToolCall(merchant, name, args ?? {});
   });

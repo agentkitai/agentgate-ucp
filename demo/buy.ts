@@ -32,6 +32,9 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 const GATE_URL = (process.env.GATE_URL ?? 'http://localhost:8787').replace(/\/+$/, '');
 const AGENTGATE_URL = (process.env.AGENTGATE_URL ?? 'http://localhost:4000').replace(/\/+$/, '');
 const AGENTGATE_API_KEY = process.env.AGENTGATE_API_KEY ?? '';
+// AgentLens is optional — the evidence beat is skipped gracefully when unset/unreachable.
+const AGENTLENS_URL = (process.env.AGENTLENS_URL ?? '').replace(/\/+$/, '');
+const AGENTLENS_API_KEY = process.env.AGENTLENS_API_KEY ?? '';
 
 /** The subset of the UCP Checkout the buying agent reads back. */
 interface Checkout {
@@ -148,6 +151,48 @@ async function humanApproves(approvalId: string): Promise<void> {
   log(`   AgentGate request ${approvalId} → status=${body.status ?? '?'} (decidedBy=demo:human-reviewer)`);
 }
 
+/**
+ * Fetch + print the Tier-A AgentLens evidence chain for this checkout. The gate
+ * self-emits a hash-chained per-checkout timeline (session `ucp_<checkoutId>`);
+ * here the agent independently verifies it. Best-effort: skips gracefully when
+ * AgentLens is unset or unreachable (it must never fail the demo).
+ */
+async function verifyEvidence(checkoutId: string): Promise<void> {
+  if (!AGENTLENS_URL) {
+    log('   (AGENTLENS_URL unset — skipping evidence verification)');
+    return;
+  }
+  const sessionId = `ucp_${checkoutId}`;
+  try {
+    const headers: Record<string, string> = {};
+    if (AGENTLENS_API_KEY) headers['Authorization'] = `Bearer ${AGENTLENS_API_KEY}`;
+    const res = await fetch(
+      `${AGENTLENS_URL}/api/audit/verify?sessionId=${encodeURIComponent(sessionId)}`,
+      { headers }
+    );
+    if (!res.ok) {
+      log(`   ⚠ evidence verify returned HTTP ${res.status} — skipping`);
+      return;
+    }
+    const body = (await res.json()) as {
+      verified?: boolean;
+      totalEvents?: number;
+      firstHash?: string | null;
+      lastHash?: string | null;
+    };
+    const events = body.totalEvents ?? 0;
+    if (body.verified && events > 0) {
+      const fh = (body.firstHash ?? '').slice(0, 12);
+      const lh = (body.lastHash ?? '').slice(0, 12);
+      log(`   ✅ evidence chain verified — ${events} events, ${fh}…${lh}`);
+    } else {
+      log(`   ⚠ evidence not verified (verified=${body.verified}, events=${events})`);
+    }
+  } catch (err) {
+    log(`   (AgentLens unreachable — skipping evidence: ${err instanceof Error ? err.message : String(err)})`);
+  }
+}
+
 async function pollUntilCompleted(client: Client, id: string, timeoutMs = 15000): Promise<Checkout> {
   const start = Date.now();
   let last: Checkout | undefined;
@@ -198,6 +243,11 @@ async function scenarioA(client: Client): Promise<void> {
   const final = await pollUntilCompleted(client, created.id);
   log(`    ✅ COMPLETED via webhook resume — checkout=${final.id}, order_id=${final.order_id}`);
   if (!final.order_id) fail('completed checkout has no order_id');
+
+  log('A6. 🔎 Verify the tamper-evident AgentLens evidence chain for this checkout…');
+  log('    (the gate self-emitted received → decision → parked → replayed on ucp_' + created.id + ')');
+  await verifyEvidence(created.id);
+
   console.log(`\n   SCENARIO A RESULT: PASS — parked over-threshold buy completed only after human approval.`);
   console.log(`   order_id = ${final.order_id}`);
 }

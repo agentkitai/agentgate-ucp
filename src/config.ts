@@ -10,6 +10,12 @@ export interface Config {
   /** HMAC secret from AgentGate `createWebhook`, used to verify decision webhooks. */
   agentgateWebhookSecret: string | undefined;
   sqlitePath: string;
+  /** AgentLens base URL for tamper-evident evidence (AGENTLENS_URL). Unset → no evidence. */
+  agentlensUrl: string | undefined;
+  /** AgentLens Bearer key (AGENTLENS_API_KEY). Omit when AgentLens runs AUTH_DISABLED. */
+  agentlensApiKey: string | undefined;
+  /** AgentGate agent token (AGENTLENS_AGENT_TOKEN) for verified-agent evidence packs. */
+  agentlensAgentToken: string | undefined;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -26,5 +32,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     agentgateApiKey: must('AGENTGATE_API_KEY'),
     agentgateWebhookSecret: env['AGENTGATE_WEBHOOK_SECRET'] || undefined,
     sqlitePath: env['SQLITE_PATH'] ?? './agentgate-ucp.db',
+    // AgentLens evidence is entirely optional — the adapter runs fine without it.
+    agentlensUrl: env['AGENTLENS_URL'] || undefined,
+    agentlensApiKey: env['AGENTLENS_API_KEY'] || undefined,
+    agentlensAgentToken: env['AGENTLENS_AGENT_TOKEN'] || undefined,
   };
 }

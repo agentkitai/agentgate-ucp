@@ -15,6 +15,7 @@ See `transcript.txt` for the captured output of a real run.
 | Sample merchant    | :3100 | `ucp-samples/rest/nodejs` — the merchant's UCP checkout REST API |
 | AgentGate          | :4000 | `agentkitai/agentgate` server — spend policy + approvals + decision webhooks |
 | The gate           | :8787 | **this repo** — the agentgate-ucp MCP proxy (`npm run dev`) |
+| AgentLens          | :3000 | `agentkitai/agentlens` — tamper-evident, hash-chained evidence (**optional**) |
 
 ```
 buy.ts (MCP client) ──MCP /mcp──▶ gate :8787 ──REST──▶ merchant :3100
@@ -38,6 +39,36 @@ It starts all three services against **temp SQLite DBs**, seeds AgentGate, runs
 `demo/buy.ts`, tees the console to `demo/transcript.txt`, then tears everything
 down and reverts the two local changes below. Override paths/workdir via env
 (`MERCHANT_DIR`, `AGENTGATE_DIR`, `WORKDIR`, …) — see the top of the script.
+
+## AgentLens evidence (optional)
+
+The gate self-emits a **tamper-evident, hash-chained per-checkout timeline** into
+AgentLens (`POST $AGENTLENS_URL/api/events`, one session `ucp_<checkoutId>`):
+
+```
+ucp.complete_checkout.received → ucp.gate.decision → ucp.order.parked → ucp.order.replayed
+```
+
+The webhook-resume event (`ucp.order.replayed`) chains onto the SAME session as the
+original completion, attributed to the same buying agent. Emission is **fail-open**:
+a checkout never fails because AgentLens is down or unconfigured.
+
+The runner sets `AGENTLENS_URL=http://localhost:3000` for the gate (override or unset
+to disable). Local AgentLens usually runs `AUTH_DISABLED=true`, so no key is needed;
+set `AGENTLENS_API_KEY` (an `als_*` key with `write`+`audit` scope) if auth is on.
+After Scenario A completes, `buy.ts` independently fetches the **Tier-A** proof:
+
+```
+GET $AGENTLENS_URL/api/audit/verify?sessionId=ucp_<checkoutId>
+→ ✅ evidence chain verified — 4 events, <firstHash>…<lastHash>
+```
+
+Relevant env:
+
+| Var                  | Default                  | Purpose                                        |
+| -------------------- | ------------------------ | ---------------------------------------------- |
+| `AGENTLENS_URL`      | `http://localhost:3000`  | AgentLens base URL. Unset → evidence disabled. |
+| `AGENTLENS_API_KEY`  | (empty)                  | Bearer key; omit when AgentLens is AUTH_DISABLED. |
 
 ## Two local, uncommitted changes (auto-applied + auto-reverted)
 
@@ -79,17 +110,18 @@ AGENTGATE_URL=http://localhost:4000 AGENTGATE_API_KEY=<agk_…> \
   GATE_WEBHOOK_URL=http://localhost:8787/agentgate/webhook \
   npx tsx demo/seed-agentgate.ts            # → {"policyId","webhookId","webhookSecret"}
 
-# 5. the gate on :8787 (pass the captured webhook secret)
+# 5. the gate on :8787 (pass the captured webhook secret; AGENTLENS_URL optional)
 cd agentgate-ucp
 PORT=8787 MERCHANT_URL=http://localhost:3100 AGENTGATE_URL=http://localhost:4000 \
   AGENTGATE_API_KEY=<agk_…> AGENTGATE_WEBHOOK_SECRET=<secret> \
+  AGENTLENS_URL=http://localhost:3000 \
   SQLITE_PATH=<tmp>/gate-parked.db npm run dev
 # ready when: curl http://localhost:8787/health
 
-# 6. run the unattended buying agent
+# 6. run the unattended buying agent (AGENTLENS_URL enables the A6 evidence beat)
 cd agentgate-ucp
 GATE_URL=http://localhost:8787 AGENTGATE_URL=http://localhost:4000 \
-  AGENTGATE_API_KEY=<agk_…> npx tsx demo/buy.ts
+  AGENTGATE_API_KEY=<agk_…> AGENTLENS_URL=http://localhost:3000 npx tsx demo/buy.ts
 ```
 
 The spend policy seeded in step 4 (global, priority 10):

@@ -22,6 +22,8 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 import { errorResult, extractHeaders, requireId, wrapCheckout } from '../mapping';
 import { MerchantClient, MerchantError } from '../merchant/client';
+import type { EvidenceRecorder } from '../observability/agentlens';
+import { recordGateEvent } from '../observability/agentlens';
 import type { ParkedSessionStore } from '../store/parked';
 import type { Checkout } from '../types';
 import type { Gate } from './agentgate';
@@ -30,6 +32,21 @@ import { flattenCheckout } from './flatten';
 /** Extra correlation the server can supply (e.g. the MCP session id). */
 export interface CompleteGateContext {
   mcpSessionId?: string | undefined;
+}
+
+/** Marks every evidence event as originating from this adapter (the source of truth). */
+const EVIDENCE_SOURCE = 'agentgate-ucp';
+
+/** Best-effort order id from a completed merchant Checkout (top-level or nested). */
+function extractOrderId(checkout: Checkout): string | undefined {
+  const top = checkout['order_id'];
+  if (typeof top === 'string' && top.length > 0) return top;
+  const order = checkout.order;
+  if (order && typeof order === 'object') {
+    const oid = (order as Record<string, unknown>)['id'];
+    if (typeof oid === 'string' && oid.length > 0) return oid;
+  }
+  return undefined;
 }
 
 /** Best-effort agent identity from `meta['ucp-agent']` (profile URL or raw string). */
@@ -89,7 +106,8 @@ export async function gateCompleteCheckout(
   gate: Gate,
   args: Record<string, unknown>,
   ctx: CompleteGateContext = {},
-  store?: ParkedSessionStore | undefined
+  store?: ParkedSessionStore | undefined,
+  recorder?: EvidenceRecorder | undefined
 ): Promise<CallToolResult> {
   let id: string;
   try {
@@ -101,16 +119,47 @@ export async function gateCompleteCheckout(
   const headers = extractHeaders(args['meta']);
   const paymentPayload = args['checkout'];
 
+  // One AgentLens session per checkout; the buying agent (or an anonymous fallback)
+  // is the actor. Every event chains onto `sessionId` server-side.
+  const agentId = extractAgentId(args['meta']) ?? 'ucp-anonymous';
+  const sessionId = `ucp_${id}`;
+  // Pinned in step (b); the closure below reads it once it's set (never before).
+  let idempotencyKey = '';
+  /** Correlation stamped on every evidence event; agentgateRequestId fills in post-decision. */
+  const metadataFor = (agentgateRequestId?: string): Record<string, unknown> => ({
+    checkoutId: id,
+    agentgateRequestId,
+    idempotencyKey,
+    source: EVIDENCE_SOURCE,
+  });
+
   try {
     // (a) Authoritative totals from the merchant, not the agent-supplied object.
     const authoritative = await merchant.getCheckout(id, headers);
     const facts = flattenCheckout(authoritative);
 
     // (b) Pin an idempotency-key (generate one if the agent omitted it).
-    const idempotencyKey =
+    idempotencyKey =
       headers.idempotencyKey && headers.idempotencyKey.length > 0
         ? headers.idempotencyKey
         : randomUUID();
+
+    // Evidence (1): the completion request AgentGate is about to gate.
+    recordGateEvent(recorder, {
+      sessionId,
+      agentId,
+      type: 'ucp.complete_checkout.received',
+      data: {
+        checkoutId: id,
+        agentId,
+        totals_total_minor: facts.totals_total_minor,
+        currency: facts.currency,
+        line_count: facts.line_count,
+        line_item_ids: facts.line_item_ids,
+        idempotencyKey,
+      },
+      metadata: metadataFor(),
+    });
 
     // (c) Evaluate against AgentGate spend policy.
     const decision = await gate.evaluate(facts, {
@@ -120,6 +169,20 @@ export async function gateCompleteCheckout(
       mcpSessionId: ctx.mcpSessionId,
     });
 
+    // Evidence (2): the gate decision (approvalId present for denied/pending).
+    const decisionRequestId = decision.status === 'approved' ? undefined : decision.approvalId;
+    recordGateEvent(recorder, {
+      sessionId,
+      agentId,
+      type: 'ucp.gate.decision',
+      data: {
+        status: decision.status,
+        agentgateRequestId: decisionRequestId,
+        reason: decision.status === 'denied' ? decision.reason : undefined,
+      },
+      metadata: metadataFor(decisionRequestId),
+    });
+
     // (d) Branch on the decision.
     switch (decision.status) {
       case 'approved': {
@@ -127,9 +190,25 @@ export async function gateCompleteCheckout(
           ...headers,
           idempotencyKey,
         });
+        // Evidence (3a): the order is placed.
+        recordGateEvent(recorder, {
+          sessionId,
+          agentId,
+          type: 'ucp.order.placed',
+          data: { orderId: extractOrderId(completed), idempotencyKey },
+          metadata: metadataFor(),
+        });
         return wrapCheckout(completed);
       }
       case 'denied':
+        // Evidence (3b): the order is denied by policy.
+        recordGateEvent(recorder, {
+          sessionId,
+          agentId,
+          type: 'ucp.order.denied',
+          data: { agentgateRequestId: decision.approvalId, reason: decision.reason },
+          metadata: metadataFor(decision.approvalId),
+        });
         return wrapCheckout(
           deniedCheckout(id, decision.reason, gate.continueUrl(decision.approvalId))
         );
@@ -143,6 +222,7 @@ export async function gateCompleteCheckout(
             approvalId: decision.approvalId,
             checkoutId: id,
             idempotencyKey,
+            agentId,
             mcpSessionId: ctx.mcpSessionId,
             checkoutSnapshot: paymentPayload,
             merchantBaseUrl: merchant.base,
@@ -152,6 +232,17 @@ export async function gateCompleteCheckout(
             updatedAt: now,
           });
         }
+        // Evidence (3c): the order is parked for human approval.
+        recordGateEvent(recorder, {
+          sessionId,
+          agentId,
+          type: 'ucp.order.parked',
+          data: {
+            agentgateRequestId: decision.approvalId,
+            continueUrl: gate.continueUrl(decision.approvalId),
+          },
+          metadata: metadataFor(decision.approvalId),
+        });
         return wrapCheckout(
           pendingCheckout(id, decision.approvalId, gate.continueUrl(decision.approvalId))
         );

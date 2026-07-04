@@ -33,6 +33,9 @@ WORKDIR_WIN="$(cygpath -m "$WORKDIR" 2>/dev/null || echo "$WORKDIR")"
 MERCHANT_PORT=3100
 AGENTGATE_PORT=4000
 GATE_PORT=8787
+# AgentLens (tamper-evident evidence). Optional: unset to run the demo without it.
+AGENTLENS_URL="${AGENTLENS_URL:-http://localhost:3000}"
+AGENTLENS_API_KEY="${AGENTLENS_API_KEY:-}"
 
 AGENTGATE_DB="$WORKDIR_WIN/agentgate.db"
 GATE_DB="$WORKDIR_WIN/gate-parked.db"
@@ -154,6 +157,8 @@ echo "── starting the gate on :$GATE_PORT ──"
   AGENTGATE_API_KEY="$ADMIN_KEY" \
   AGENTGATE_WEBHOOK_SECRET="$WEBHOOK_SECRET" \
   SQLITE_PATH="$GATE_DB" \
+  AGENTLENS_URL="$AGENTLENS_URL" \
+  AGENTLENS_API_KEY="$AGENTLENS_API_KEY" \
   npm run dev > "$WORKDIR/gate.log" 2>&1 ) &
 wait_http "http://localhost:$GATE_PORT/health" gate || { tail -20 "$WORKDIR/gate.log"; exit 1; }
 
@@ -163,6 +168,8 @@ echo "── running demo/buy.ts (transcript → $TRANSCRIPT) ──"
   GATE_URL="http://localhost:$GATE_PORT" \
   AGENTGATE_URL="http://localhost:$AGENTGATE_PORT" \
   AGENTGATE_API_KEY="$ADMIN_KEY" \
+  AGENTLENS_URL="$AGENTLENS_URL" \
+  AGENTLENS_API_KEY="$AGENTLENS_API_KEY" \
   npx tsx demo/buy.ts ) 2>&1 | tee "$TRANSCRIPT"
 STATUS=${PIPESTATUS[0]}
 

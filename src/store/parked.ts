@@ -14,6 +14,12 @@ export interface ParkedSession {
   checkoutId: string;
   /** The UCP complete idempotency-key — replay-critical. */
   idempotencyKey: string;
+  /**
+   * The buying agent id (from `meta['ucp-agent']`). Optional: carried so the
+   * webhook-resume AgentLens evidence events are attributed to the SAME agent as
+   * the original completion, keeping one coherent per-checkout session chain.
+   */
+  agentId?: string | undefined;
   mcpSessionId: string | undefined;
   checkoutSnapshot: unknown;
   merchantBaseUrl: string;
@@ -34,6 +40,7 @@ interface ParkedRow {
   approval_id: string;
   checkout_id: string;
   idempotency_key: string;
+  agent_id: string | null;
   mcp_session_id: string | null;
   checkout_snapshot: string;
   merchant_base_url: string;
@@ -48,6 +55,7 @@ const CREATE_TABLE = `
     approval_id       TEXT PRIMARY KEY,
     checkout_id       TEXT NOT NULL,
     idempotency_key   TEXT NOT NULL,
+    agent_id          TEXT,
     mcp_session_id    TEXT,
     checkout_snapshot TEXT NOT NULL,
     merchant_base_url TEXT NOT NULL,
@@ -71,10 +79,10 @@ export function openParkedStore(sqlitePath: string): ParkedSessionStore {
 
   const putStmt = db.prepare(
     `INSERT OR REPLACE INTO parked_sessions
-       (approval_id, checkout_id, idempotency_key, mcp_session_id, checkout_snapshot,
+       (approval_id, checkout_id, idempotency_key, agent_id, mcp_session_id, checkout_snapshot,
         merchant_base_url, status, order_result, created_at, updated_at)
      VALUES
-       (@approval_id, @checkout_id, @idempotency_key, @mcp_session_id, @checkout_snapshot,
+       (@approval_id, @checkout_id, @idempotency_key, @agent_id, @mcp_session_id, @checkout_snapshot,
         @merchant_base_url, @status, @order_result, @created_at, @updated_at)`
   );
   const getStmt = db.prepare(`SELECT * FROM parked_sessions WHERE approval_id = ?`);
@@ -89,6 +97,7 @@ export function openParkedStore(sqlitePath: string): ParkedSessionStore {
         approval_id: session.approvalId,
         checkout_id: session.checkoutId,
         idempotency_key: session.idempotencyKey,
+        agent_id: session.agentId ?? null,
         mcp_session_id: session.mcpSessionId ?? null,
         // `undefined` payloads serialise to the literal "null" so the column stays NOT NULL.
         checkout_snapshot: JSON.stringify(session.checkoutSnapshot ?? null),
@@ -110,6 +119,7 @@ export function openParkedStore(sqlitePath: string): ParkedSessionStore {
         approvalId: row.approval_id,
         checkoutId: row.checkout_id,
         idempotencyKey: row.idempotency_key,
+        agentId: row.agent_id ?? undefined,
         mcpSessionId: row.mcp_session_id ?? undefined,
         checkoutSnapshot: JSON.parse(row.checkout_snapshot),
         merchantBaseUrl: row.merchant_base_url,
