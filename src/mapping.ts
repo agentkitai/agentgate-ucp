@@ -161,7 +161,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
   },
 ];
 
-function requireId(id: unknown, tool: string): string {
+export function requireId(id: unknown, tool: string): string {
   if (typeof id !== 'string' || id.length === 0) {
     throw new Error(`${tool} requires a string "id" argument`);
   }

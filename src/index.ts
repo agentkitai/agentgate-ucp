@@ -6,11 +6,13 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 
 import { loadConfig } from './config';
+import { PolicyGate } from './gate/agentgate';
 import { createGateServer } from './mcp/server';
 import { MerchantClient } from './merchant/client';
 
 const config = loadConfig();
 const merchant = new MerchantClient(config.merchantUrl);
+const gate = new PolicyGate({ baseUrl: config.agentgateUrl, apiKey: config.agentgateApiKey });
 
 type Bindings = { Bindings: HttpBindings };
 const app = new Hono<Bindings>();
@@ -30,7 +32,7 @@ app.get('/health', (c) => c.json({ ok: true, service: 'agentgate-ucp', version: 
  */
 async function handleMcp(c: Context<Bindings>): Promise<Response> {
   const { incoming, outgoing } = c.env;
-  const server = createGateServer({ merchant });
+  const server = createGateServer({ merchant, gate });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   outgoing.on('close', () => {
     void transport.close();
