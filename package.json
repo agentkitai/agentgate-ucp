@@ -1,0 +1,45 @@
+{
+  "name": "@agentkitai/agentgate-ucp",
+  "version": "0.1.0",
+  "description": "The approval gate for unattended UCP buying agents — a policy/approval MCP proxy in front of a merchant's UCP checkout endpoint.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "agentgate-ucp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run"
+  },
+  "keywords": [
+    "ucp",
+    "agentgate",
+    "mcp",
+    "commerce",
+    "approval",
+    "unattended-agents"
+  ],
+  "dependencies": {
+    "@agentkitai/agentgate-sdk": "^0.1.0",
+    "@hono/node-server": "^1.19.10",
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "better-sqlite3": "^11.6.0",
+    "hono": "^4.12.25",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.6"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
