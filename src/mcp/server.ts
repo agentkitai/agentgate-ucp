@@ -17,6 +17,7 @@ import {
 
 import type { Gate } from '../gate/agentgate';
 import { gateCompleteCheckout } from '../gate/complete';
+import type { HandoffDeps } from '../handoff/run';
 import { dispatchToolCall, isCheckoutToolName, TOOL_DEFINITIONS } from '../mapping';
 import type { MerchantClient } from '../merchant/client';
 import type { EvidenceRecorder } from '../observability/agentlens';
@@ -30,13 +31,15 @@ export interface GateServerDeps {
   store?: ParkedSessionStore | undefined;
   /** Optional AgentLens recorder. When present, the gate self-emits per-checkout evidence. */
   recorder?: EvidenceRecorder | undefined;
+  /** Optional FormBridge handoff bundle (gate point 3). Absent ⇒ buyer-input stays a raw escalation. */
+  handoff?: HandoffDeps | undefined;
 }
 
 /**
  * Build a fresh MCP `Server` wired to the given merchant client (and optional
  * gate). In the StreamableHTTP stateless setup one of these is created per request.
  */
-export function createGateServer({ merchant, gate, store, recorder }: GateServerDeps): Server {
+export function createGateServer({ merchant, gate, store, recorder, handoff }: GateServerDeps): Server {
   const server = new Server(
     { name: 'agentgate-ucp', version: '0.1.0' },
     { capabilities: { tools: {} } }
@@ -55,9 +58,9 @@ export function createGateServer({ merchant, gate, store, recorder }: GateServer
       throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
     }
     if (name === 'complete_checkout' && gate) {
-      return gateCompleteCheckout(merchant, gate, args ?? {}, {}, store, recorder);
+      return gateCompleteCheckout(merchant, gate, args ?? {}, {}, store, recorder, handoff);
     }
-    return dispatchToolCall(merchant, name, args ?? {});
+    return dispatchToolCall(merchant, name, args ?? {}, handoff);
   });
 
   return server;

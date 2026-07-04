@@ -20,6 +20,9 @@ import { randomUUID } from 'node:crypto';
 
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
+import { detectBuyerInput } from '../handoff/detect';
+import type { HandoffContext, HandoffDeps } from '../handoff/run';
+import { maybeHandoffBuyerInput } from '../handoff/run';
 import { errorResult, extractHeaders, requireId, wrapCheckout } from '../mapping';
 import { MerchantClient, MerchantError } from '../merchant/client';
 import type { EvidenceRecorder } from '../observability/agentlens';
@@ -32,6 +35,12 @@ import { flattenCheckout } from './flatten';
 /** Extra correlation the server can supply (e.g. the MCP session id). */
 export interface CompleteGateContext {
   mcpSessionId?: string | undefined;
+  /**
+   * Force any buyer-input handoff on THIS completion to mint a NEW form/row instead
+   * of reusing the checkout's existing one. Set by the answer-back re-drive: a
+   * renewed buyer-input there is a fresh round, not the just-answered round-1 form.
+   */
+  forceFreshHandoff?: boolean | undefined;
 }
 
 /** Marks every evidence event as originating from this adapter (the source of truth). */
@@ -107,7 +116,8 @@ export async function gateCompleteCheckout(
   args: Record<string, unknown>,
   ctx: CompleteGateContext = {},
   store?: ParkedSessionStore | undefined,
-  recorder?: EvidenceRecorder | undefined
+  recorder?: EvidenceRecorder | undefined,
+  handoff?: HandoffDeps | undefined
 ): Promise<CallToolResult> {
   let id: string;
   try {
@@ -143,6 +153,29 @@ export async function gateCompleteCheckout(
       headers.idempotencyKey && headers.idempotencyKey.length > 0
         ? headers.idempotencyKey
         : randomUUID();
+
+    // Shared correlation for a possible buyer-input handoff (after GET or after complete).
+    const handoffCtx = (): HandoffContext => ({
+      checkoutId: id,
+      merchantBaseUrl: merchant.base,
+      agentId,
+      ucpAgent: headers.ucpAgent,
+      paymentPayload,
+      idempotencyKey,
+    });
+
+    // (a′) If the authoritative checkout is ALREADY a buyer-input escalation AND
+    // form handoff is configured, hand off immediately — there is nothing to gate
+    // until the human supplies the field. Guarded on `handoff` so that with
+    // FORMBRIDGE_URL unset the flow is genuinely unchanged from pre-gate-3: the
+    // gate evidence is emitted, the spend gate runs, and merchant.completeCheckout
+    // surfaces the escalation naturally (no short-circuit).
+    if (handoff && detectBuyerInput(authoritative).length > 0) {
+      const escalation = await maybeHandoffBuyerInput(authoritative, handoffCtx(), handoff, {
+        forceFresh: ctx.forceFreshHandoff,
+      });
+      return wrapCheckout(escalation);
+    }
 
     // Evidence (1): the completion request AgentGate is about to gate.
     recordGateEvent(recorder, {
@@ -190,6 +223,15 @@ export async function gateCompleteCheckout(
           ...headers,
           idempotencyKey,
         });
+        // The merchant may answer an approved completion with a buyer-input
+        // escalation ("I still need a field from the human"). That is NOT a
+        // placed order — hand it off to a typed form instead.
+        if (detectBuyerInput(completed).length > 0) {
+          const escalation = await maybeHandoffBuyerInput(completed, handoffCtx(), handoff, {
+            forceFresh: ctx.forceFreshHandoff,
+          });
+          return wrapCheckout(escalation);
+        }
         // Evidence (3a): the order is placed.
         recordGateEvent(recorder, {
           sessionId,

@@ -12,8 +12,12 @@
  *   - `id`                     → the target checkout id (get/update/complete/cancel)
  *   - `checkout`               → the domain payload (create/update/complete)
  */
+import { randomUUID } from 'node:crypto';
+
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 
+import type { HandoffContext, HandoffDeps } from './handoff/run';
+import { maybeHandoffBuyerInput } from './handoff/run';
 import { MerchantClient, MerchantError } from './merchant/client';
 import type { MerchantHeaders } from './merchant/client';
 import type { Checkout, CheckoutToolName } from './types';
@@ -168,6 +172,19 @@ export function requireId(id: unknown, tool: string): string {
   return id;
 }
 
+/** Best-effort agent identity from `meta['ucp-agent']` (profile URL or raw string). */
+function extractAgentId(meta: unknown): string {
+  if (meta && typeof meta === 'object') {
+    const agent = (meta as Record<string, unknown>)['ucp-agent'];
+    if (typeof agent === 'string' && agent.length > 0) return agent;
+    if (agent && typeof agent === 'object') {
+      const profile = (agent as Record<string, unknown>)['profile'];
+      if (typeof profile === 'string' && profile.length > 0) return profile;
+    }
+  }
+  return 'ucp-anonymous';
+}
+
 /**
  * Dispatch a checkout tool call to the merchant and wrap the result. Merchant
  * (and argument) errors are converted to `isError` results — this never throws.
@@ -175,7 +192,8 @@ export function requireId(id: unknown, tool: string): string {
 export async function dispatchToolCall(
   merchant: MerchantClient,
   name: CheckoutToolName,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  handoff?: HandoffDeps | undefined
 ): Promise<CallToolResult> {
   const headers = extractHeaders(args['meta']);
   const checkout = args['checkout'];
@@ -204,7 +222,29 @@ export async function dispatchToolCall(
         return errorResult(`Unknown tool: ${String(exhaustive)}`);
       }
     }
-    return wrapCheckout(result);
+    // A passthrough result can itself be a `requires_buyer_input` escalation. Run
+    // the shared detect+handoff seam: a no-op unless it IS buyer-input AND handoff
+    // is configured. For a NO-GATE `complete_checkout` (this passthrough IS the
+    // completion in no-gate server mode) park the ACTUAL payment payload + a pinned
+    // idempotency-key so a later answer-back can re-drive the order — otherwise a
+    // buyer-input on it could never be completed. The other four tools have no
+    // completion to re-drive → paymentPayload null.
+    const finalCheckout = await maybeHandoffBuyerInput(
+      result,
+      {
+        checkoutId: String(result.id ?? id ?? ''),
+        merchantBaseUrl: merchant.base,
+        agentId: extractAgentId(args['meta']),
+        ucpAgent: headers.ucpAgent,
+        paymentPayload: name === 'complete_checkout' ? (checkout ?? null) : null,
+        idempotencyKey:
+          headers.idempotencyKey && headers.idempotencyKey.length > 0
+            ? headers.idempotencyKey
+            : randomUUID(),
+      } satisfies HandoffContext,
+      handoff
+    );
+    return wrapCheckout(finalCheckout);
   } catch (err) {
     if (err instanceof MerchantError) {
       return errorResult(err.message);
