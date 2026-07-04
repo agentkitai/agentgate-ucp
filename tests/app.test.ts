@@ -2,12 +2,12 @@ import { createHmac } from 'node:crypto';
 
 import { describe, expect, it } from 'vitest';
 
-import { createApp } from '../src/app';
-import type { AppDeps } from '../src/app';
-import type { Gate } from '../src/gate/agentgate';
-import type { MerchantClient } from '../src/merchant/client';
-import { openFormPendingStore } from '../src/store/form-pending';
-import { openParkedStore } from '../src/store/parked';
+import { createApp } from '../src/app.js';
+import type { AppDeps } from '../src/app.js';
+import type { Gate } from '../src/gate/agentgate.js';
+import type { MerchantClient } from '../src/merchant/client.js';
+import { openFormPendingStore } from '../src/store/form-pending.js';
+import { openParkedStore } from '../src/store/parked.js';
 
 const SECRET = 'whsec_formbridge';
 

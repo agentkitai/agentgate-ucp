@@ -6,7 +6,7 @@ import {
   toSegments,
   UnsupportedPathError,
   writeAtPath,
-} from '../src/schema/jsonpath';
+} from '../src/schema/jsonpath.js';
 
 describe('readAtPath', () => {
   const obj = {

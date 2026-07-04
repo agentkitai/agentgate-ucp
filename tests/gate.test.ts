@@ -3,12 +3,12 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it } from 'vitest';
 
-import type { Gate, GateContext, GateDecision } from '../src/gate/agentgate';
-import { gateCompleteCheckout } from '../src/gate/complete';
-import { createGateServer } from '../src/mcp/server';
-import { MerchantClient } from '../src/merchant/client';
-import { openParkedStore } from '../src/store/parked';
-import type { Checkout, CheckoutFacts } from '../src/types';
+import type { Gate, GateContext, GateDecision } from '../src/gate/agentgate.js';
+import { gateCompleteCheckout } from '../src/gate/complete.js';
+import { createGateServer } from '../src/mcp/server.js';
+import { MerchantClient } from '../src/merchant/client.js';
+import { openParkedStore } from '../src/store/parked.js';
+import type { Checkout, CheckoutFacts } from '../src/types.js';
 
 /** Recording stub merchant. `getCheckout` returns the AUTHORITATIVE checkout. */
 interface MerchantCall {

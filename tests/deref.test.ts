@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { loadCheckoutSchema, resolveFieldSchemaAtPath } from '../src/schema/deref';
-import type { JSONSchema } from '../src/schema/json-schema';
-import { UnsupportedPathError } from '../src/schema/jsonpath';
+import { loadCheckoutSchema, resolveFieldSchemaAtPath } from '../src/schema/deref.js';
+import type { JSONSchema } from '../src/schema/json-schema.js';
+import { UnsupportedPathError } from '../src/schema/jsonpath.js';
 
 /** True if `key` appears anywhere in the (possibly cyclic) schema graph. */
 function hasKeyDeep(obj: unknown, key: string, seen = new Set<unknown>()): boolean {

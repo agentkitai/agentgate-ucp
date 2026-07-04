@@ -16,12 +16,12 @@ import { randomUUID } from 'node:crypto';
 
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 
-import type { HandoffContext, HandoffDeps } from './handoff/run';
-import { maybeHandoffBuyerInput } from './handoff/run';
-import { MerchantClient, MerchantError } from './merchant/client';
-import type { MerchantHeaders } from './merchant/client';
-import type { Checkout, CheckoutToolName } from './types';
-import { CHECKOUT_TOOL_NAMES } from './types';
+import type { HandoffContext, HandoffDeps } from './handoff/run.js';
+import { maybeHandoffBuyerInput } from './handoff/run.js';
+import { MerchantClient, MerchantError } from './merchant/client.js';
+import type { MerchantHeaders } from './merchant/client.js';
+import type { Checkout, CheckoutToolName } from './types.js';
+import { CHECKOUT_TOOL_NAMES } from './types.js';
 
 /**
  * Serialise the `meta['ucp-agent']` value into the `UCP-Agent` structured-header

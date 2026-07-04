@@ -13,12 +13,12 @@
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-import type { MerchantClient } from '../merchant/client';
-import type { EvidenceRecorder } from '../observability/agentlens';
-import { recordGateEvent } from '../observability/agentlens';
-import type { Checkout } from '../types';
+import type { MerchantClient } from '../merchant/client.js';
+import type { EvidenceRecorder } from '../observability/agentlens.js';
+import { recordGateEvent } from '../observability/agentlens.js';
+import type { Checkout } from '../types.js';
 
-import type { ParkedSessionStore } from '../store/parked';
+import type { ParkedSessionStore } from '../store/parked.js';
 
 export interface WebhookDeps {
   store: ParkedSessionStore;

@@ -1,4 +1,4 @@
-import type { Checkout, CheckoutFacts } from '../types';
+import type { Checkout, CheckoutFacts } from '../types.js';
 
 /**
  * Flatten a merchant Checkout into matcher-friendly facts for AgentGate policy

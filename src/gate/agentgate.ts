@@ -1,6 +1,6 @@
 import { AgentGateClient } from '@agentkitai/agentgate-sdk';
 
-import type { CheckoutFacts } from '../types';
+import type { CheckoutFacts } from '../types.js';
 
 /**
  * The gate decision for a `complete_checkout`, derived from AgentGate's static

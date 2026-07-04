@@ -10,15 +10,15 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 
-import type { Gate } from './gate/agentgate';
-import { handleAnswerBackWebhook } from './handoff/answer-back';
-import type { HandoffDeps } from './handoff/run';
-import { createGateServer } from './mcp/server';
-import type { MerchantClient } from './merchant/client';
-import type { EvidenceRecorder } from './observability/agentlens';
-import type { FormPendingStore } from './store/form-pending';
-import type { ParkedSessionStore } from './store/parked';
-import { handleDecisionWebhook } from './webhook/receiver';
+import type { Gate } from './gate/agentgate.js';
+import { handleAnswerBackWebhook } from './handoff/answer-back.js';
+import type { HandoffDeps } from './handoff/run.js';
+import { createGateServer } from './mcp/server.js';
+import type { MerchantClient } from './merchant/client.js';
+import type { EvidenceRecorder } from './observability/agentlens.js';
+import type { FormPendingStore } from './store/form-pending.js';
+import type { ParkedSessionStore } from './store/parked.js';
+import { handleDecisionWebhook } from './webhook/receiver.js';
 
 export interface AppDeps {
   merchant: MerchantClient;

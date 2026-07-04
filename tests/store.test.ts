@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import type { FormPendingSession } from '../src/store/form-pending';
-import { openFormPendingStore } from '../src/store/form-pending';
-import type { ParkedSession } from '../src/store/parked';
-import { openParkedStore } from '../src/store/parked';
+import type { FormPendingSession } from '../src/store/form-pending.js';
+import { openFormPendingStore } from '../src/store/form-pending.js';
+import type { ParkedSession } from '../src/store/parked.js';
+import { openParkedStore } from '../src/store/parked.js';
 
 /** A fully-populated pending session with an object snapshot to round-trip. */
 function pendingSession(overrides: Partial<ParkedSession> = {}): ParkedSession {

@@ -8,11 +8,11 @@ import {
   extractHeaders,
   formatUcpAgent,
   TOOL_DEFINITIONS,
-} from '../src/mapping';
-import { MerchantClient, MerchantError } from '../src/merchant/client';
-import { createGateServer } from '../src/mcp/server';
-import type { Checkout, CheckoutToolName } from '../src/types';
-import { CHECKOUT_TOOL_NAMES } from '../src/types';
+} from '../src/mapping.js';
+import { MerchantClient, MerchantError } from '../src/merchant/client.js';
+import { createGateServer } from '../src/mcp/server.js';
+import type { Checkout, CheckoutToolName } from '../src/types.js';
+import { CHECKOUT_TOOL_NAMES } from '../src/types.js';
 
 /** A recording stub standing in for the real MerchantClient. */
 interface RecordedCall {

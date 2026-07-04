@@ -13,18 +13,18 @@
  */
 import { createHash } from 'node:crypto';
 
-import type { FieldMap } from '../store/form-pending';
-import type { JSONSchema } from '../schema/json-schema';
-import { resolveFieldSchemaAtPath } from '../schema/deref';
+import type { FieldMap } from '../store/form-pending.js';
+import type { JSONSchema } from '../schema/json-schema.js';
+import { resolveFieldSchemaAtPath } from '../schema/deref.js';
 import {
   assertWritableSingularPath,
   readAtPath,
   toSegments,
   UnsupportedPathError,
-} from '../schema/jsonpath';
-import type { Checkout } from '../types';
-import type { BuyerInputMessage } from './detect';
-import type { FormBridgeClient, FormBridgeActor } from '../formbridge/client';
+} from '../schema/jsonpath.js';
+import type { Checkout } from '../types.js';
+import type { BuyerInputMessage } from './detect.js';
+import type { FormBridgeClient, FormBridgeActor } from '../formbridge/client.js';
 
 /**
  * Build the human-facing resume URL: the FormBridge form-RENDERER page (a real

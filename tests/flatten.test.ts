@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { flattenCheckout } from '../src/gate/flatten';
-import type { Checkout } from '../src/types';
+import { flattenCheckout } from '../src/gate/flatten.js';
+import type { Checkout } from '../src/types.js';
 
 describe('flattenCheckout', () => {
   it('extracts the grand total (type=total) in minor units', () => {

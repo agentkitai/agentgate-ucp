@@ -20,17 +20,17 @@ import { randomUUID } from 'node:crypto';
 
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
-import { detectBuyerInput } from '../handoff/detect';
-import type { HandoffContext, HandoffDeps } from '../handoff/run';
-import { maybeHandoffBuyerInput } from '../handoff/run';
-import { errorResult, extractHeaders, requireId, wrapCheckout } from '../mapping';
-import { MerchantClient, MerchantError } from '../merchant/client';
-import type { EvidenceRecorder } from '../observability/agentlens';
-import { recordGateEvent } from '../observability/agentlens';
-import type { ParkedSessionStore } from '../store/parked';
-import type { Checkout } from '../types';
-import type { Gate } from './agentgate';
-import { flattenCheckout } from './flatten';
+import { detectBuyerInput } from '../handoff/detect.js';
+import type { HandoffContext, HandoffDeps } from '../handoff/run.js';
+import { maybeHandoffBuyerInput } from '../handoff/run.js';
+import { errorResult, extractHeaders, requireId, wrapCheckout } from '../mapping.js';
+import { MerchantClient, MerchantError } from '../merchant/client.js';
+import type { EvidenceRecorder } from '../observability/agentlens.js';
+import { recordGateEvent } from '../observability/agentlens.js';
+import type { ParkedSessionStore } from '../store/parked.js';
+import type { Checkout } from '../types.js';
+import type { Gate } from './agentgate.js';
+import { flattenCheckout } from './flatten.js';
 
 /** Extra correlation the server can supply (e.g. the MCP session id). */
 export interface CompleteGateContext {

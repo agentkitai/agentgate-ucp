@@ -26,8 +26,8 @@ import { fileURLToPath } from 'node:url';
 import $RefParser from '@apidevtools/json-schema-ref-parser';
 import mergeAllOf from 'json-schema-merge-allof';
 
-import type { JSONSchema } from './json-schema';
-import { toSegments, UnsupportedPathError } from './jsonpath';
+import type { JSONSchema } from './json-schema.js';
+import { toSegments, UnsupportedPathError } from './jsonpath.js';
 
 /** Absolute base every bundled UCP schema advertises via its `$id`. */
 const UCP_URL_BASE = 'https://ucp.dev/';

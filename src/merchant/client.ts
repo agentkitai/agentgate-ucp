@@ -14,7 +14,7 @@
  * and `UCP-Agent` request headers. No RFC-9421 signing (local demo; the merchant
  * does not verify signatures).
  */
-import type { Checkout } from '../types';
+import type { Checkout } from '../types.js';
 
 /** Extra headers the merchant reads off each request. */
 export interface MerchantHeaders {

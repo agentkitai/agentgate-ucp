@@ -2,10 +2,10 @@ import { createHmac } from 'node:crypto';
 
 import { describe, expect, it } from 'vitest';
 
-import type { MerchantClient } from '../src/merchant/client';
-import type { ParkedSession, ParkedSessionStore } from '../src/store/parked';
-import { openParkedStore } from '../src/store/parked';
-import { handleDecisionWebhook } from '../src/webhook/receiver';
+import type { MerchantClient } from '../src/merchant/client.js';
+import type { ParkedSession, ParkedSessionStore } from '../src/store/parked.js';
+import { openParkedStore } from '../src/store/parked.js';
+import { handleDecisionWebhook } from '../src/webhook/receiver.js';
 
 const SECRET = 'whsec_test';
 

@@ -8,7 +8,7 @@
  * the ones with a usable `path`) so the handoff can build a TYPED form field per
  * message from the resolved UCP field schema.
  */
-import type { Checkout, CheckoutMessage } from '../types';
+import type { Checkout, CheckoutMessage } from '../types.js';
 
 /** A buyer-input message with a guaranteed field `path`. */
 export interface BuyerInputMessage {

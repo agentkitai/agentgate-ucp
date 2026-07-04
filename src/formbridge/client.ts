@@ -12,7 +12,7 @@
  * FormBridge typically runs with auth disabled (no key needed). Every non-2xx is
  * raised as a typed {@link FormBridgeError} carrying the status + body.
  */
-import type { JSONSchema } from '../schema/json-schema';
+import type { JSONSchema } from '../schema/json-schema.js';
 
 /** The subset of an actor FormBridge records on a submission. */
 export interface FormBridgeActor {

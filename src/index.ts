@@ -1,14 +1,14 @@
 import { serve } from '@hono/node-server';
 
-import { createApp } from './app';
-import { loadConfig } from './config';
-import { FormBridgeClient } from './formbridge/client';
-import { PolicyGate } from './gate/agentgate';
-import type { HandoffDeps } from './handoff/run';
-import { MerchantClient } from './merchant/client';
-import { AgentLensRecorder } from './observability/agentlens';
-import { openFormPendingStore } from './store/form-pending';
-import { openParkedStore } from './store/parked';
+import { createApp } from './app.js';
+import { loadConfig } from './config.js';
+import { FormBridgeClient } from './formbridge/client.js';
+import { PolicyGate } from './gate/agentgate.js';
+import type { HandoffDeps } from './handoff/run.js';
+import { MerchantClient } from './merchant/client.js';
+import { AgentLensRecorder } from './observability/agentlens.js';
+import { openFormPendingStore } from './store/form-pending.js';
+import { openParkedStore } from './store/parked.js';
 
 const config = loadConfig();
 const merchant = new MerchantClient(config.merchantUrl);

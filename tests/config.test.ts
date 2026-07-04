@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { loadConfig } from '../src/config';
+import { loadConfig } from '../src/config.js';
 
 /** A minimal, valid base environment (the three required vars). */
 function baseEnv(): NodeJS.ProcessEnv {

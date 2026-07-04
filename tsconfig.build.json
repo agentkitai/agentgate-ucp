@@ -2,6 +2,8 @@
   "//": "Emit-only build: `src` is the rootDir so it lands at the `dist` ROOT (dist/index.js, dist/schema/deref.js) — matching package.json main/bin/start and letting deref.js resolve its sibling ./ucp schemas. tsconfig.json stays the typecheck/test config (includes tests, rootDir '.').",
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "rootDir": "src"
   },
   "include": ["src/**/*.ts"]

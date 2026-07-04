@@ -5,17 +5,17 @@ import type {
   FormBridgeActor,
   FormBridgeClient,
   FormBridgeIntakeDefinition,
-} from '../src/formbridge/client';
-import type { Gate } from '../src/gate/agentgate';
-import { gateCompleteCheckout } from '../src/gate/complete';
-import type { HandoffContext, HandoffDeps } from '../src/handoff/run';
-import { maybeHandoffBuyerInput } from '../src/handoff/run';
-import { dispatchToolCall } from '../src/mapping';
-import { MerchantClient } from '../src/merchant/client';
-import type { EvidenceRecorder } from '../src/observability/agentlens';
-import type { JSONSchema } from '../src/schema/json-schema';
-import { openFormPendingStore } from '../src/store/form-pending';
-import type { Checkout } from '../src/types';
+} from '../src/formbridge/client.js';
+import type { Gate } from '../src/gate/agentgate.js';
+import { gateCompleteCheckout } from '../src/gate/complete.js';
+import type { HandoffContext, HandoffDeps } from '../src/handoff/run.js';
+import { maybeHandoffBuyerInput } from '../src/handoff/run.js';
+import { dispatchToolCall } from '../src/mapping.js';
+import { MerchantClient } from '../src/merchant/client.js';
+import type { EvidenceRecorder } from '../src/observability/agentlens.js';
+import type { JSONSchema } from '../src/schema/json-schema.js';
+import { openFormPendingStore } from '../src/store/form-pending.js';
+import type { Checkout } from '../src/types.js';
 
 interface CreateCall {
   intakeId: string;

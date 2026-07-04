@@ -28,17 +28,17 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
-import type { Gate } from '../gate/agentgate';
-import { gateCompleteCheckout } from '../gate/complete';
-import { detectBuyerInput } from './detect';
-import type { HandoffDeps } from './run';
-import { MerchantClient, MerchantError } from '../merchant/client';
-import type { EvidenceRecorder } from '../observability/agentlens';
-import { recordGateEvent } from '../observability/agentlens';
-import { writeAtPath } from '../schema/jsonpath';
-import type { FormPendingStatus, FormPendingStore } from '../store/form-pending';
-import type { ParkedSessionStore } from '../store/parked';
-import type { Checkout } from '../types';
+import type { Gate } from '../gate/agentgate.js';
+import { gateCompleteCheckout } from '../gate/complete.js';
+import { detectBuyerInput } from './detect.js';
+import type { HandoffDeps } from './run.js';
+import { MerchantClient, MerchantError } from '../merchant/client.js';
+import type { EvidenceRecorder } from '../observability/agentlens.js';
+import { recordGateEvent } from '../observability/agentlens.js';
+import { writeAtPath } from '../schema/jsonpath.js';
+import type { FormPendingStatus, FormPendingStore } from '../store/form-pending.js';
+import type { ParkedSessionStore } from '../store/parked.js';
+import type { Checkout } from '../types.js';
 
 const EVIDENCE_SOURCE = 'agentgate-ucp';
 

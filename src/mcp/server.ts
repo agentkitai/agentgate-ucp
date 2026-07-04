@@ -15,13 +15,13 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 
-import type { Gate } from '../gate/agentgate';
-import { gateCompleteCheckout } from '../gate/complete';
-import type { HandoffDeps } from '../handoff/run';
-import { dispatchToolCall, isCheckoutToolName, TOOL_DEFINITIONS } from '../mapping';
-import type { MerchantClient } from '../merchant/client';
-import type { EvidenceRecorder } from '../observability/agentlens';
-import type { ParkedSessionStore } from '../store/parked';
+import type { Gate } from '../gate/agentgate.js';
+import { gateCompleteCheckout } from '../gate/complete.js';
+import type { HandoffDeps } from '../handoff/run.js';
+import { dispatchToolCall, isCheckoutToolName, TOOL_DEFINITIONS } from '../mapping.js';
+import type { MerchantClient } from '../merchant/client.js';
+import type { EvidenceRecorder } from '../observability/agentlens.js';
+import type { ParkedSessionStore } from '../store/parked.js';
 
 export interface GateServerDeps {
   merchant: MerchantClient;

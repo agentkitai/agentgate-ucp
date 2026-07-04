@@ -17,14 +17,14 @@
  * schema error is logged and ALSO degrades to the raw escalation — a buyer-input
  * result must NEVER crash the tool call.
  */
-import type { EvidenceRecorder } from '../observability/agentlens';
-import { recordGateEvent } from '../observability/agentlens';
-import type { FormBridgeClient } from '../formbridge/client';
-import type { FormPendingStore } from '../store/form-pending';
-import type { Checkout } from '../types';
-import { buildBuyerInputIntake, resumeUrlForToken } from './build-intake';
-import type { BuyerInputMessage } from './detect';
-import { detectBuyerInput } from './detect';
+import type { EvidenceRecorder } from '../observability/agentlens.js';
+import { recordGateEvent } from '../observability/agentlens.js';
+import type { FormBridgeClient } from '../formbridge/client.js';
+import type { FormPendingStore } from '../store/form-pending.js';
+import type { Checkout } from '../types.js';
+import { buildBuyerInputIntake, resumeUrlForToken } from './build-intake.js';
+import type { BuyerInputMessage } from './detect.js';
+import { detectBuyerInput } from './detect.js';
 
 const EVIDENCE_SOURCE = 'agentgate-ucp';
 

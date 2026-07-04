@@ -7,13 +7,13 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import type { Gate, GateContext, GateDecision } from '../src/gate/agentgate';
-import { gateCompleteCheckout } from '../src/gate/complete';
-import type { MerchantClient } from '../src/merchant/client';
-import type { AgentLensEventInput, EvidenceRecorder } from '../src/observability/agentlens';
-import { openParkedStore } from '../src/store/parked';
-import type { Checkout, CheckoutFacts } from '../src/types';
-import { handleDecisionWebhook } from '../src/webhook/receiver';
+import type { Gate, GateContext, GateDecision } from '../src/gate/agentgate.js';
+import { gateCompleteCheckout } from '../src/gate/complete.js';
+import type { MerchantClient } from '../src/merchant/client.js';
+import type { AgentLensEventInput, EvidenceRecorder } from '../src/observability/agentlens.js';
+import { openParkedStore } from '../src/store/parked.js';
+import type { Checkout, CheckoutFacts } from '../src/types.js';
+import { handleDecisionWebhook } from '../src/webhook/receiver.js';
 
 // ─── Stubs ──────────────────────────────────────────────────────────
 

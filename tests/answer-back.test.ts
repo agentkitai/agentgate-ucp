@@ -7,15 +7,15 @@ import type {
   FormBridgeActor,
   FormBridgeClient,
   FormBridgeIntakeDefinition,
-} from '../src/formbridge/client';
-import type { Gate } from '../src/gate/agentgate';
-import { handleAnswerBackWebhook } from '../src/handoff/answer-back';
-import type { HandoffDeps } from '../src/handoff/run';
-import { MerchantClient, MerchantError } from '../src/merchant/client';
-import { openFormPendingStore } from '../src/store/form-pending';
-import type { FormPendingStore } from '../src/store/form-pending';
-import { openParkedStore } from '../src/store/parked';
-import type { Checkout } from '../src/types';
+} from '../src/formbridge/client.js';
+import type { Gate } from '../src/gate/agentgate.js';
+import { handleAnswerBackWebhook } from '../src/handoff/answer-back.js';
+import type { HandoffDeps } from '../src/handoff/run.js';
+import { MerchantClient, MerchantError } from '../src/merchant/client.js';
+import { openFormPendingStore } from '../src/store/form-pending.js';
+import type { FormPendingStore } from '../src/store/form-pending.js';
+import { openParkedStore } from '../src/store/parked.js';
+import type { Checkout } from '../src/types.js';
 
 const SECRET = 'whsec_formbridge';
 
