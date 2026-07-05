@@ -9,19 +9,22 @@
 #   formbridge:8091   agentkitai/formbridge   (typed form handoff, gate point 3)
 #   gate      :8787   THIS repo               (agentgate-ucp MCP proxy)
 #
-# LOCAL changes applied and REVERTED automatically:
+# LOCAL change applied and REVERTED automatically:
 #   1. merchant fork (demo/merchant-fork.patch) → $PORT + two demo-only merchant
 #      escalations (bulk inventory hold; orchid_white buyer-input). Applied with
 #      `git apply`, reverted with `git checkout` on exit. This is the COMMITTED
-#      demo fixture — the merchant source itself is left clean.
-#   2. agentgate dist/lib/url-validator.js → an env-GATED loopback allowance so
-#      AgentGate can deliver the decision webhook to the local gate. It is inert
-#      unless AGENTGATE_UCP_DEMO_ALLOW_LOOPBACK=1 (which we set only here), and
-#      the original file is restored from a backup on exit.
+#      demo fixture — the merchant source itself is left clean. It is the ONLY
+#      local change the runner makes: nothing else is patched, backed up, or
+#      restored.
 #
-# FormBridge's SSRF guard blocks literal localhost/127.0.0.1 destination URLs, so
-# the gate registers its answer-back webhook under PUBLIC_URL=http://lvh.me:8787
-# (lvh.me resolves to 127.0.0.1 via public DNS — needs outbound DNS, no inbound).
+# Loopback webhooks (everything runs on 127.0.0.1) use the SHIPPED dev-mode SSRF
+# escape hatches — no dist patching, no lvh.me DNS trick:
+#   - AgentGate delivers its decision webhook to the local gate because it runs
+#     with AGENTGATE_ALLOW_PRIVATE_WEBHOOKS=1 in its env.
+#   - FormBridge accepts the gate's plain http://127.0.0.1:8787 answer-back
+#     destination because it runs with FORMBRIDGE_ALLOW_PRIVATE_WEBHOOKS=1.
+# Both flags are dev/test-only and HARD-REFUSED when NODE_ENV=production, so both
+# processes run in dev (never production) for the hatches to take effect.
 #
 # Requires: node >=20, npx, git. Run from the agentgate-ucp repo root:
 #   bash demo/run-demo.sh
@@ -57,14 +60,12 @@ AGENTLENS_API_KEY="${AGENTLENS_API_KEY:-}"
 AGENTLENS_AGENT_TOKEN="${AGENTLENS_AGENT_TOKEN:-}"
 # Shared HMAC secret: FormBridge signs the answer-back webhook, the gate verifies it.
 FORMBRIDGE_WEBHOOK_SECRET="${FORMBRIDGE_WEBHOOK_SECRET:-$(node -e 'console.log(require("crypto").randomBytes(24).toString("hex"))')}"
-# lvh.me → 127.0.0.1 (public DNS): the gate's registered webhook URL that clears
-# FormBridge's SSRF guard while still reaching the local gate.
-GATE_PUBLIC_URL="http://lvh.me:$GATE_PORT"
+# The gate's registered answer-back webhook URL. Plain loopback — FormBridge accepts
+# it because we run FormBridge with FORMBRIDGE_ALLOW_PRIVATE_WEBHOOKS=1 (dev flag).
+GATE_PUBLIC_URL="http://127.0.0.1:$GATE_PORT"
 
 AGENTGATE_DB="$WORKDIR_WIN/agentgate.db"
 GATE_DB="$WORKDIR_WIN/gate-parked.db"
-SSRF_FILE="$AGENTGATE_SERVER_DIR/dist/lib/url-validator.js"
-SSRF_BAK="$WORKDIR/url-validator.js.demo-bak"
 
 echo "workdir: $WORKDIR"
 
@@ -102,8 +103,6 @@ cleanup() {
   kill_matching 'ucp-samples[\\/]rest[\\/]nodejs'
   kill_matching 'agentgate-ucp[\\/]node_modules[\\/].*tsx'
   kill_matching 'formbridge[\\/]dist[\\/]server'
-  # Restore the agentgate SSRF validator.
-  [ -f "$SSRF_BAK" ] && cp -f "$SSRF_BAK" "$SSRF_FILE" && echo "restored $SSRF_FILE"
   # Revert ONLY the fork WE applied this run: reverse our own patch hunks (never a
   # blanket `git checkout`, which would silently discard a user's unrelated local
   # edits to the merchant repo). No-op if we didn't apply it (dirty tree / prior run).
@@ -153,19 +152,7 @@ ADMIN_KEY=$(cd "$ADAPTER_DIR" && AGENTGATE_SERVER_DIR="$AGENTGATE_SERVER_DIR" DA
 if [ -z "$ADMIN_KEY" ]; then echo "ERROR: failed to mint admin key"; exit 1; fi
 echo "  admin key: ${ADMIN_KEY:0:12}…"
 
-# ── 3. patch SSRF validator (env-gated, reverted on exit) ───────────────
-echo "── patching agentgate SSRF validator (env-gated loopback allowance) ──"
-cp -f "$SSRF_FILE" "$SSRF_BAK"
-node -e '
-  const fs=require("fs"); const f=process.argv[1];
-  let s=fs.readFileSync(f,"utf8");
-  const needle="export async function validateWebhookUrl(url) {";
-  const guard=needle+"\n    if (process.env.AGENTGATE_UCP_DEMO_ALLOW_LOOPBACK === \x27\x31\x27) { try { const __u = new URL(url); if (__u.hostname === \x27localhost\x27 || __u.hostname === \x27127.0.0.1\x27 || __u.hostname === \x27::1\x27) { return { valid: true, resolvedIP: \x27127.0.0.1\x27 }; } } catch (e) {} }";
-  if (!s.includes("AGENTGATE_UCP_DEMO_ALLOW_LOOPBACK")) { s=s.replace(needle,guard); fs.writeFileSync(f,s); console.log("  patched validateWebhookUrl (loopback allowed when env flag set)"); }
-  else { console.log("  already patched"); }
-' "$SSRF_FILE"
-
-# ── 4. start agentgate :4000 ────────────────────────────────────────────
+# ── 3. start agentgate :4000 ────────────────────────────────────────────
 echo "── starting AgentGate on :$AGENTGATE_PORT ──"
 ( cd "$AGENTGATE_DIR" && \
   PORT=$AGENTGATE_PORT \
@@ -175,7 +162,7 @@ echo "── starting AgentGate on :$AGENTGATE_PORT ──"
   DATABASE_URL="$AGENTGATE_DB" \
   RATE_LIMIT_ENABLED=false \
   LOG_LEVEL=info \
-  AGENTGATE_UCP_DEMO_ALLOW_LOOPBACK=1 \
+  AGENTGATE_ALLOW_PRIVATE_WEBHOOKS=1 \
   node packages/server/dist/index.js > "$WORKDIR/agentgate.log" 2>&1 ) &
 wait_http "http://localhost:$AGENTGATE_PORT/health" agentgate || { tail -20 "$WORKDIR/agentgate.log"; exit 1; }
 
@@ -197,15 +184,18 @@ echo "── building + starting FormBridge on :$FORMBRIDGE_PORT ──"
   || { echo "  ERROR: FormBridge build failed"; tail -20 "$WORKDIR/formbridge-build.log"; exit 1; }
 ( cd "$FORMBRIDGE_DIR" && \
   PORT=$FORMBRIDGE_PORT \
+  NODE_ENV=development \
   FORMBRIDGE_AUTH_ENABLED=false \
   FORMBRIDGE_STORAGE=memory \
+  FORMBRIDGE_ALLOW_PRIVATE_WEBHOOKS=1 \
   FORMBRIDGE_WEBHOOK_SECRET="$FORMBRIDGE_WEBHOOK_SECRET" \
   node dist/server.js > "$WORKDIR/formbridge.log" 2>&1 ) &
 wait_http "http://localhost:$FORMBRIDGE_PORT/health" formbridge || { tail -20 "$WORKDIR/formbridge.log"; exit 1; }
 
 # ── 5. gate :8787 ───────────────────────────────────────────────────────
-# PUBLIC_URL uses lvh.me (→127.0.0.1) so the answer-back webhook URL the gate
-# registers with FormBridge clears FormBridge's SSRF guard yet reaches the gate.
+# PUBLIC_URL is plain loopback (http://127.0.0.1:8787); the answer-back webhook URL
+# the gate registers with FormBridge is accepted because FormBridge runs with
+# FORMBRIDGE_ALLOW_PRIVATE_WEBHOOKS=1.
 echo "── starting the gate on :$GATE_PORT ──"
 ( cd "$ADAPTER_DIR" && \
   PORT=$GATE_PORT \

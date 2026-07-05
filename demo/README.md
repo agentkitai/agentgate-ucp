@@ -45,14 +45,16 @@ Ports: the sample merchant, AgentGate, and FormBridge all default to :3000, but
 **AgentLens owns :3000** in this environment, so the merchant runs on :3100,
 AgentGate on :4000, and FormBridge on :8091.
 
-### The FormBridge SSRF workaround (Scenario D)
+### Loopback webhooks (Scenarios A + D)
 
-FormBridge blocks literal `localhost`/`127.0.0.1` webhook-destination URLs (an
-SSRF guard with no disable switch). So the gate registers its answer-back webhook
-under `PUBLIC_URL=http://lvh.me:8787` — `lvh.me` resolves to `127.0.0.1` via public
-DNS, clearing the guard while still reaching the local gate. This needs **outbound
-DNS** (no inbound). Offline fallback: a hosts-file entry (e.g. `formbridge.local →
-127.0.0.1`) and `PUBLIC_URL=http://formbridge.local:8787`.
+AgentGate and FormBridge both guard against SSRF by blocking `localhost`/private
+webhook destinations. For a local demo each honors an explicit, default-off,
+production-refused dev flag: the runner sets **`AGENTGATE_ALLOW_PRIVATE_WEBHOOKS=1`**
+(so AgentGate can deliver its decision webhook to the gate on `127.0.0.1`) and
+**`FORMBRIDGE_ALLOW_PRIVATE_WEBHOOKS=1`** (so FormBridge can deliver the answer-back).
+Cloud-metadata + non-HTTP(S) stay blocked even with the flags on, and both are
+ignored when `NODE_ENV=production`. No `lvh.me`/DNS trick and no dist-patching — the
+gate registers a plain `http://127.0.0.1:8787` destination.
 
 ## One command
 
@@ -162,20 +164,20 @@ adds three demo-only, clearly-labelled behaviours:
 `better-sqlite3@11` prebuilt was dropped into its `node_modules` — a local artifact,
 not committed.)
 
-## Two local, uncommitted changes (auto-applied + auto-reverted)
+## Local changes (auto-applied + auto-reverted)
 
-The runner also makes two throwaway edits and restores both on exit:
+- **Merchant fork** — the committed `demo/merchant-fork.patch` is `git apply`-d to
+  the ucp-samples repo before start and reversed on exit (the runner refuses a dirty
+  merchant tree and only reverses what it applied). It honors `$PORT` and adds two
+  demo-only merchant escalations (an inventory hold; an `orchid_white` buyer-input).
+- **FormBridge `dist/`** is rebuilt (`npm run build`) before start — its committed
+  `dist/` is gitignored/stale. FormBridge runs with auth off and in-memory storage;
+  nothing in its tree is committed by this demo.
 
-1. **AgentGate `dist/lib/url-validator.js` → an env-gated loopback allowance.**
-   AgentGate's webhook SSRF guard blocks `localhost`/`127.0.0.1` (and every
-   private LAN IP), so it can't deliver the decision webhook to a local gate. The
-   runner injects a guard that returns "valid" **only for loopback and only when
-   `AGENTGATE_UCP_DEMO_ALLOW_LOOPBACK=1`** (which it sets only for this run); the
-   original file is backed up and restored on exit. This is a local demo-only
-   shim — in a real deployment the gate has a routable host and no shim is needed.
-2. **FormBridge `dist/`** is rebuilt (`npm run build`) before start — its committed
-   `dist/` is gitignored/stale. FormBridge runs with `FORMBRIDGE_AUTH_ENABLED=false`
-   and in-memory storage; nothing in its tree is committed by this demo.
+(Previously the runner also dist-patched AgentGate's SSRF validator to allow the
+loopback decision webhook. That shim is gone — AgentGate and FormBridge now ship the
+`AGENTGATE_ALLOW_PRIVATE_WEBHOOKS` / `FORMBRIDGE_ALLOW_PRIVATE_WEBHOOKS` dev flags, so
+the runner just sets those.)
 
 ## Manual steps (what the runner automates)
 
@@ -193,7 +195,7 @@ AGENTGATE_SERVER_DIR=<…>/agentgate/packages/server DATABASE_URL=<tmp>/agentgat
 # 3. AgentGate on :4000 (built dist, api-key-only, sqlite temp DB)
 cd agentgate && PORT=4000 NODE_ENV=development AUTH_MODE=api-key-only \
   DB_DIALECT=sqlite DATABASE_URL=<tmp>/agentgate.db RATE_LIMIT_ENABLED=false \
-  AGENTGATE_UCP_DEMO_ALLOW_LOOPBACK=1 node packages/server/dist/index.js
+  AGENTGATE_ALLOW_PRIVATE_WEBHOOKS=1 node packages/server/dist/index.js
 # ready when: curl http://localhost:4000/health
 
 # 4. seed the spend policy + decision webhook (prints the webhook secret)
@@ -204,13 +206,13 @@ AGENTGATE_URL=http://localhost:4000 AGENTGATE_API_KEY=<agk_…> \
 
 # 5. FormBridge on :8091 (build once — dist is stale — then run, auth off)
 cd formbridge && npm run build
-PORT=8091 FORMBRIDGE_AUTH_ENABLED=false FORMBRIDGE_STORAGE=memory \
-  FORMBRIDGE_WEBHOOK_SECRET=<fb-secret> node dist/server.js
+PORT=8091 NODE_ENV=development FORMBRIDGE_AUTH_ENABLED=false FORMBRIDGE_STORAGE=memory \
+  FORMBRIDGE_ALLOW_PRIVATE_WEBHOOKS=1 FORMBRIDGE_WEBHOOK_SECRET=<fb-secret> node dist/server.js
 # ready when: curl http://localhost:8091/health
 
-# 6. the gate on :8787 (PUBLIC_URL=lvh.me clears FormBridge's SSRF guard)
+# 6. the gate on :8787 (registers a plain loopback answer-back webhook)
 cd agentgate-ucp
-PORT=8787 PUBLIC_URL=http://lvh.me:8787 \
+PORT=8787 PUBLIC_URL=http://127.0.0.1:8787 \
   MERCHANT_URL=http://localhost:3100 AGENTGATE_URL=http://localhost:4000 \
   AGENTGATE_API_KEY=<agk_…> AGENTGATE_WEBHOOK_SECRET=<secret> \
   AGENTLENS_URL=http://localhost:3000 \
