@@ -1,0 +1,102 @@
+diff --git a/rest/nodejs/src/api/checkout.ts b/rest/nodejs/src/api/checkout.ts
+index caa7aa8..c871613 100644
+--- a/rest/nodejs/src/api/checkout.ts
++++ b/rest/nodejs/src/api/checkout.ts
+@@ -550,6 +550,18 @@ export class CheckoutService {
+     if (updateRequest.buyer) {
+       existing.buyer = updateRequest.buyer;
+     }
++
++    // ── agentgate-ucp DEMO FIXTURE: an update RESOLVES a prior escalation ──
++    // When the checkout was held in `requires_escalation` (e.g. buyer-input awaiting
++    // a delivery phone), the buyer supplying that field via update_checkout CLEARS
++    // the hold — otherwise a re-driven complete_checkout would still see a stale
++    // buyer-input escalation on the authoritative GET and never place the order. A
++    // real merchant transitions out of the hold once the missing field arrives.
++    if (existing.status === CheckoutResponseStatusSchema.enum.requires_escalation) {
++      existing.status = CheckoutResponseStatusSchema.enum.incomplete;
++      existing.messages = [];
++      existing.continue_url = undefined;
++    }
+     const platformConfig = await this.parseAgentProfile(ucpAgent);
+     if (platformConfig) {
+       existing.platform = platformConfig;
+@@ -664,6 +676,63 @@ export class CheckoutService {
+       return c.json({ detail: `Checkout already completed or canceled` }, 409);
+     }
+ 
++    // ── agentgate-ucp DEMO FIXTURE: two merchant-native escalations on complete ──
++    // These let the adapter demonstrate faithful surfacing of merchant-side holds.
++    //
++    // (1) INVENTORY HOLD (gate point 2, NOT buyer-input): a bulk order (any line
++    //     with quantity >= 3) is held for an inventory review the merchant needs a
++    //     human to clear. It is a PLAIN hold — a `requires_buyer_review` message with
++    //     a `continue_url` and NO field `path` — so the adapter must surface it as an
++    //     escalation, never a placed order (no order_id). It stays under the demo
++    //     spend limit so the spend gate APPROVES first, then the merchant holds.
++    const DEMO_BULK_HOLD_QTY = 3;
++    if (checkout.line_items.some((li) => li.quantity >= DEMO_BULK_HOLD_QTY)) {
++      checkout.status = CheckoutResponseStatusSchema.enum.requires_escalation;
++      checkout.messages = [
++        {
++          type: "info",
++          code: "inventory_hold",
++          content: "Item on inventory hold, review required.",
++          severity: "requires_buyer_review",
++        },
++      ];
++      checkout.continue_url = `${new URL(c.req.url).origin}/holds/${checkout.id}`;
++      saveCheckout(id, checkout.status, checkout);
++      return c.json(checkout, 200);
++    }
++
++    // (2) BUYER-INPUT (gate point 3): the SKU `orchid_white` needs a delivery phone
++    // number this merchant's API can't collect programmatically. Until
++    // `buyer.phone_number` is present, completing it returns a `requires_buyer_input`
++    // escalation (with a field `path`) rather than placing the order — the adapter
++    // turns this into a typed FormBridge form. Once the human supplies the phone via
++    // update_checkout, the re-driven completion falls through and places the order.
++    const DEMO_BUYER_INPUT_SKU = "orchid_white";
++    const needsPhone = checkout.line_items.some(
++      (li) => li.item.id === DEMO_BUYER_INPUT_SKU
++    );
++    if (needsPhone && !checkout.buyer?.phone_number) {
++      checkout.status = CheckoutResponseStatusSchema.enum.requires_escalation;
++      checkout.messages = [
++        {
++          type: "info",
++          code: "buyer_input_required",
++          content: "A delivery phone number is required to complete this order.",
++          severity: "requires_buyer_input",
++          path: "$.buyer.phone_number",
++        },
++      ];
++      checkout.continue_url = `${new URL(c.req.url).origin}/resume/${checkout.id}`;
++      saveCheckout(id, checkout.status, checkout);
++      return c.json(checkout, 200);
++    }
++
++    // Neither demo escalation fired → the order is being PLACED for real. Clear any
++    // stale escalation artifacts a prior buyer-input/inventory round left on the
++    // checkout so the completed order is clean (no lingering escalation message).
++    checkout.messages = [];
++    checkout.continue_url = undefined;
++
+     // Process Payment
+     const selectedInstrument = rawBody.payment_data;
+ 
+diff --git a/rest/nodejs/src/index.ts b/rest/nodejs/src/index.ts
+index 6e339d7..55290f8 100644
+--- a/rest/nodejs/src/index.ts
++++ b/rest/nodejs/src/index.ts
+@@ -126,7 +126,9 @@ app.post(
+ serve(
+   {
+     fetch: app.fetch,
+-    port: 3000,
++    // agentgate-ucp DEMO FIXTURE: honor $PORT so the merchant can run on :3100
++    // (AgentLens owns :3000 in the demo environment). Defaults to 3000.
++    port: Number(process.env.PORT ?? 3000),
+   },
+   (info) => {
+     console.log(`Server is running on http://localhost:${info.port}`);

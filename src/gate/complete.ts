@@ -232,6 +232,31 @@ export async function gateCompleteCheckout(
           });
           return wrapCheckout(escalation);
         }
+        // The merchant may ALSO answer an approved completion with a plain
+        // merchant-native escalation that is NOT buyer-input — a hold the merchant
+        // needs a human to clear (e.g. an inventory review). It carries no field
+        // `path`, so the buyer-input handoff above is a no-op. This is likewise NOT
+        // a placed order: surface it FAITHFULLY (status/messages/continue_url are
+        // already preserved by the passthrough) and record it as an escalation, NOT
+        // as `ucp.order.placed` with a phantom orderId (orderId only when truly
+        // completed). The spend-gate evidence above (received + decision) still
+        // stands: the gate DID approve; the merchant then held the order.
+        if (completed.status === 'requires_escalation') {
+          recordGateEvent(recorder, {
+            sessionId,
+            agentId,
+            type: 'ucp.order.escalated',
+            data: {
+              status: completed.status,
+              continueUrl:
+                typeof completed.continue_url === 'string' ? completed.continue_url : undefined,
+              messages: completed.messages,
+              idempotencyKey,
+            },
+            metadata: metadataFor(),
+          });
+          return wrapCheckout(completed);
+        }
         // Evidence (3a): the order is placed.
         recordGateEvent(recorder, {
           sessionId,

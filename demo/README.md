@@ -1,10 +1,24 @@
 # agentgate-ucp — end-to-end demo
 
-Proves the milestone: **an unattended buying agent (a script, nobody watching)
-buys over the spend policy → the gate parks it and returns an escalation → a
-human approves it in AgentGate → the decision webhook fires → the gate replays
-the completion with the original idempotency-key → the order completes.** It also
-shows the under-threshold case completing immediately (auto-approve).
+Drives an unattended buying agent (a script, nobody watching) through **four**
+scenarios against the LIVE 5-service stack, asserting each:
+
+- **A — over the spend policy → approval loop.** The gate parks the completion and
+  returns an escalation → a human approves it in AgentGate → the decision webhook
+  fires → the gate replays the completion with the original idempotency-key → the
+  order completes.
+- **B — under the spend policy → auto-approve.** Completes immediately, no human.
+- **C — merchant-native escalation (gate point 2).** The spend gate APPROVES, then
+  the merchant answers with a NON-buyer-input `requires_escalation` (a bulk
+  inventory-review hold). The adapter must surface the hold + `continue_url`
+  **faithfully — it is NOT a placed order** (no `order_id`).
+- **D — merchant buyer-input, END-TO-END (gate point 3).** The spend gate APPROVES,
+  the merchant answers `requires_buyer_input` (needs a delivery phone) → the adapter
+  mints a **typed FormBridge form** → a simulated human fills + submits it in
+  FormBridge → FormBridge fires the **signed** answer-back webhook → the adapter
+  `update_checkout`s the phone and **re-drives `complete_checkout` through the REAL
+  spend gate** → the order completes. The Tier-A AgentLens evidence chain is then
+  verified (`verified:true`).
 
 See `transcript.txt` for the captured output of a real run.
 
@@ -12,22 +26,33 @@ See `transcript.txt` for the captured output of a real run.
 
 | Service            | Port  | What                                                        |
 | ------------------ | ----- | ---------------------------------------------------------- |
-| Sample merchant    | :3100 | `ucp-samples/rest/nodejs` — the merchant's UCP checkout REST API |
+| Sample merchant    | :3100 | `ucp-samples/rest/nodejs` **+ the committed fork** (`merchant-fork.patch`) |
 | AgentGate          | :4000 | `agentkitai/agentgate` server — spend policy + approvals + decision webhooks |
+| FormBridge         | :8091 | `agentkitai/formbridge` — typed form handoff for buyer-input (**Scenario D**) |
 | The gate           | :8787 | **this repo** — the agentgate-ucp MCP proxy (`npm run dev`) |
 | AgentLens          | :3000 | `agentkitai/agentlens` — tamper-evident, hash-chained evidence (**optional**) |
 
 ```
 buy.ts (MCP client) ──MCP /mcp──▶ gate :8787 ──REST──▶ merchant :3100
-                                    │  ▲
-                     POST /api/requests │  │ decision webhook (HMAC) → /agentgate/webhook
-                                    ▼  │
-                              AgentGate :4000  ◀── human taps "Approve" (POST /api/requests/:id/decide)
+                                  │  ▲   │  ▲
+                 POST /api/requests│  │   │  └─ POST /intakes + /submissions ─▶ FormBridge :8091
+                                  ▼  │   │        signed answer-back (HMAC) ◀── human fills+submits
+                            AgentGate :4000 ◀── human taps "Approve"
+                            decision webhook (HMAC) ─▶ gate /agentgate/webhook
 ```
 
-Ports: the sample merchant and AgentGate both default to :3000, but **AgentLens
-owns :3000** in this environment, so the merchant runs on :3100 and AgentGate on
-:4000.
+Ports: the sample merchant, AgentGate, and FormBridge all default to :3000, but
+**AgentLens owns :3000** in this environment, so the merchant runs on :3100,
+AgentGate on :4000, and FormBridge on :8091.
+
+### The FormBridge SSRF workaround (Scenario D)
+
+FormBridge blocks literal `localhost`/`127.0.0.1` webhook-destination URLs (an
+SSRF guard with no disable switch). So the gate registers its answer-back webhook
+under `PUBLIC_URL=http://lvh.me:8787` — `lvh.me` resolves to `127.0.0.1` via public
+DNS, clearing the guard while still reaching the local gate. This needs **outbound
+DNS** (no inbound). Offline fallback: a hosts-file entry (e.g. `formbridge.local →
+127.0.0.1`) and `PUBLIC_URL=http://formbridge.local:8787`.
 
 ## One command
 
@@ -35,10 +60,11 @@ owns :3000** in this environment, so the merchant runs on :3100 and AgentGate on
 bash demo/run-demo.sh
 ```
 
-It starts all three services against **temp SQLite DBs**, seeds AgentGate, runs
-`demo/buy.ts`, tees the console to `demo/transcript.txt`, then tears everything
-down and reverts the two local changes below. Override paths/workdir via env
-(`MERCHANT_DIR`, `AGENTGATE_DIR`, `WORKDIR`, …) — see the top of the script.
+It applies the merchant fork, starts all four services against **temp SQLite DBs /
+in-memory FormBridge**, seeds AgentGate, runs `demo/buy.ts` (all four scenarios),
+tees the console to `demo/transcript.txt`, then tears everything down and reverts
+the local changes below. Override paths/workdir via env (`MERCHANT_DIR`,
+`AGENTGATE_DIR`, `FORMBRIDGE_DIR`, `WORKDIR`, …) — see the top of the script.
 
 ## AgentLens evidence (optional)
 
@@ -70,27 +96,51 @@ Relevant env:
 | `AGENTLENS_URL`      | `http://localhost:3000`  | AgentLens base URL. Unset → evidence disabled. |
 | `AGENTLENS_API_KEY`  | (empty)                  | Bearer key; omit when AgentLens is AUTH_DISABLED. |
 
+## The merchant fork (a COMMITTED demo fixture)
+
+`merchant-fork.patch` is the committed fork of `ucp-samples/rest/nodejs` this demo
+runs against. The runner `git apply`s it before starting the merchant and reverts
+it with `git checkout` on exit, so the `ucp-samples` working tree stays clean. It
+adds three demo-only, clearly-labelled behaviours:
+
+1. **`$PORT`** honoured (so the merchant runs on :3100; AgentLens owns :3000).
+2. **Bulk inventory hold (Scenario C):** any line with `quantity >= 3` completes
+   into a NON-buyer-input `requires_escalation` (a `requires_buyer_review` hold with
+   a `continue_url`, no field `path`). `3 × pot_ceramic = 4500` stays under the spend
+   limit, so the spend gate approves *first*, then the merchant holds — exercising
+   the adapter's faithful surfacing (gate point 2).
+3. **Buyer-input on `orchid_white` (Scenario D):** completing an `orchid_white`
+   checkout without `buyer.phone_number` returns a `requires_buyer_input` escalation
+   (with `path: $.buyer.phone_number`); once the phone is supplied via
+   `update_checkout`, the re-driven completion places the order. `update_checkout`
+   also clears a prior `requires_escalation` hold so the re-drive isn't
+   short-circuited by the stale escalation.
+
+(Also, the sample merchant's `better-sqlite3@9` won't build on node-24; a working
+`better-sqlite3@11` prebuilt was dropped into its `node_modules` — a local artifact,
+not committed.)
+
 ## Two local, uncommitted changes (auto-applied + auto-reverted)
 
-The runner makes two throwaway local edits and restores both on exit:
+The runner also makes two throwaway edits and restores both on exit:
 
-1. **merchant `src/index.ts` → honor `$PORT`** so it can run on :3100. Reverted
-   with `git checkout` in `ucp-samples`. (Also, the sample merchant's
-   `better-sqlite3@9` won't build on node-24; a working `better-sqlite3@11`
-   prebuilt was dropped into its `node_modules` — a local artifact, not committed.)
-2. **AgentGate `dist/lib/url-validator.js` → an env-gated loopback allowance.**
+1. **AgentGate `dist/lib/url-validator.js` → an env-gated loopback allowance.**
    AgentGate's webhook SSRF guard blocks `localhost`/`127.0.0.1` (and every
    private LAN IP), so it can't deliver the decision webhook to a local gate. The
    runner injects a guard that returns "valid" **only for loopback and only when
    `AGENTGATE_UCP_DEMO_ALLOW_LOOPBACK=1`** (which it sets only for this run); the
    original file is backed up and restored on exit. This is a local demo-only
    shim — in a real deployment the gate has a routable host and no shim is needed.
+2. **FormBridge `dist/`** is rebuilt (`npm run build`) before start — its committed
+   `dist/` is gitignored/stale. FormBridge runs with `FORMBRIDGE_AUTH_ENABLED=false`
+   and in-memory storage; nothing in its tree is committed by this demo.
 
 ## Manual steps (what the runner automates)
 
 ```bash
-# 1. merchant on :3100 (src patched to honor $PORT)
-cd ucp-samples/rest/nodejs && PORT=3100 npx tsx src/index.ts
+# 1. merchant on :3100 (fork applied from the ucp-samples repo root)
+cd ucp-samples && git apply <…>/agentgate-ucp/demo/merchant-fork.patch
+cd rest/nodejs && PORT=3100 npx tsx src/index.ts
 # ready when: curl http://localhost:3100/.well-known/ucp
 
 # 2. mint the first AgentGate admin key (server DOWN — writes the DB directly)
@@ -110,18 +160,28 @@ AGENTGATE_URL=http://localhost:4000 AGENTGATE_API_KEY=<agk_…> \
   GATE_WEBHOOK_URL=http://localhost:8787/agentgate/webhook \
   npx tsx demo/seed-agentgate.ts            # → {"policyId","webhookId","webhookSecret"}
 
-# 5. the gate on :8787 (pass the captured webhook secret; AGENTLENS_URL optional)
+# 5. FormBridge on :8091 (build once — dist is stale — then run, auth off)
+cd formbridge && npm run build
+PORT=8091 FORMBRIDGE_AUTH_ENABLED=false FORMBRIDGE_STORAGE=memory \
+  FORMBRIDGE_WEBHOOK_SECRET=<fb-secret> node dist/server.js
+# ready when: curl http://localhost:8091/health
+
+# 6. the gate on :8787 (PUBLIC_URL=lvh.me clears FormBridge's SSRF guard)
 cd agentgate-ucp
-PORT=8787 MERCHANT_URL=http://localhost:3100 AGENTGATE_URL=http://localhost:4000 \
+PORT=8787 PUBLIC_URL=http://lvh.me:8787 \
+  MERCHANT_URL=http://localhost:3100 AGENTGATE_URL=http://localhost:4000 \
   AGENTGATE_API_KEY=<agk_…> AGENTGATE_WEBHOOK_SECRET=<secret> \
   AGENTLENS_URL=http://localhost:3000 \
+  FORMBRIDGE_URL=http://localhost:8091 FORMBRIDGE_PUBLIC_URL=http://localhost:8091 \
+  FORMBRIDGE_WEBHOOK_SECRET=<fb-secret> \
   SQLITE_PATH=<tmp>/gate-parked.db npm run dev
 # ready when: curl http://localhost:8787/health
 
-# 6. run the unattended buying agent (AGENTLENS_URL enables the A6 evidence beat)
+# 7. run the unattended buying agent (all four scenarios)
 cd agentgate-ucp
 GATE_URL=http://localhost:8787 AGENTGATE_URL=http://localhost:4000 \
-  AGENTGATE_API_KEY=<agk_…> AGENTLENS_URL=http://localhost:3000 npx tsx demo/buy.ts
+  AGENTGATE_API_KEY=<agk_…> AGENTLENS_URL=http://localhost:3000 \
+  FORMBRIDGE_URL=http://localhost:8091 npx tsx demo/buy.ts
 ```
 
 The spend policy seeded in step 4 (global, priority 10):
@@ -129,19 +189,24 @@ The spend policy seeded in step 4 (global, priority 10):
 - `params.checkout.totals_total_minor $gt 5000` → `route_to_human` (park for approval)
 - `params.checkout.totals_total_minor $lt 5000` → `auto_approve` (complete immediately)
 
-`buy.ts` buys `bouquet_roses` (@3500 minor): **×2 = 7000** trips the gate
-(Scenario A), **×1 = 3500** auto-approves (Scenario B). The human approval in
-Scenario A is `POST /api/requests/:id/decide` with the admin key (the AgentGate
-SDK doesn't expose a decide method), which fires the `request.approved` webhook.
+`buy.ts` products (all except the ×2 roses stay under the spend limit, so the spend
+gate approves and the merchant's own escalation is exercised): `bouquet_roses`
+**×2 = 7000** trips the gate (A) / **×1 = 3500** auto-approves (B); `pot_ceramic`
+**×3 = 4500** is a bulk inventory hold (C); `orchid_white` **×1 = 4500** needs a
+buyer phone (D). The human approval in Scenario A is `POST /api/requests/:id/decide`
+with the admin key (the AgentGate SDK doesn't expose a decide method), which fires
+the `request.approved` webhook. The FormBridge secret in steps 5–6 must match
+(it signs / the gate verifies the answer-back webhook).
 
 ## Files
 
 | File                  | Purpose                                                        |
 | --------------------- | -------------------------------------------------------------- |
-| `buy.ts`              | The unattended buying agent (MCP client). Scenarios A + B.     |
+| `buy.ts`              | The unattended buying agent (MCP client). Scenarios A–D.       |
+| `merchant-fork.patch` | **Committed** merchant fork fixture ($PORT + the C/D escalations). |
 | `seed-agentgate.ts`   | Seeds the spend policy + decision webhook via the AgentGate SDK. |
 | `mint-admin-key.ts`   | Mints the first AgentGate admin API key straight into its DB.  |
-| `run-demo.sh`         | Orchestrator: start → seed → run → capture → teardown/revert.  |
+| `run-demo.sh`         | Orchestrator: fork → start (×4) → seed → run → capture → teardown/revert. |
 | `transcript.txt`      | Captured output of a real end-to-end run (the evidence).       |
 
 The `demo/` scripts are run with `tsx` and are intentionally OUTSIDE `tsconfig.json`'s

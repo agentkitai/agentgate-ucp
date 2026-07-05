@@ -3,25 +3,43 @@
  *
  * A script (nobody is watching it) that connects an MCP client to the gate
  * (agentgate-ucp) at $GATE_URL/mcp — exactly as it would to a merchant's UCP
- * checkout endpoint — and drives two purchases:
+ * checkout endpoint — and drives FOUR purchases:
  *
  *   Scenario A (over the spend policy → approval loop):
- *     create_checkout (total 7000 minor, > 5000) → complete_checkout
- *     → gate PARKS it and returns `requires_escalation` + approval_id.
- *     A human then approves the request in AgentGate; the decision webhook
- *     fires; the gate replays the completion with the ORIGINAL idempotency-key;
- *     the order completes. The agent learns via get_checkout polling.
+ *     create_checkout (2 × bouquet_roses = 7000 minor, > 5000) → complete_checkout
+ *     → gate PARKS it and returns `requires_escalation` + approval_id. A human
+ *     approves in AgentGate; the decision webhook fires; the gate replays the
+ *     completion with the ORIGINAL idempotency-key; the order completes.
  *
  *   Scenario B (under the spend policy → auto-approve):
- *     create_checkout (total 3500 minor, < 5000) → complete_checkout
+ *     create_checkout (1 × bouquet_roses = 3500 minor, < 5000) → complete_checkout
  *     → gate auto-approves and completes IMMEDIATELY (no escalation).
  *
- * Config (env):
- *   GATE_URL          gate MCP base            (default http://localhost:8787)
- *   AGENTGATE_URL     AgentGate API base       (default http://localhost:4000)
- *   AGENTGATE_API_KEY admin agk_ key — used to POST the human approval decision
+ *   Scenario C (merchant-native escalation → surfaced, NOT placed) [gate point 2]:
+ *     create_checkout (3 × pot_ceramic = 4500 minor, < 5000) → complete_checkout
+ *     → the spend gate APPROVES, then the merchant answers with a NON-buyer-input
+ *     `requires_escalation` (a bulk inventory-review hold). The adapter must
+ *     surface the hold + continue_url faithfully — it is NOT a placed order.
  *
- * Exit code 0 iff both scenarios pass their assertions.
+ *   Scenario D (merchant buyer-input → typed FormBridge form) [gate point 3],
+ *   END-TO-END with the REAL AgentGate gate and REAL FormBridge:
+ *     create_checkout (1 × orchid_white = 4500 minor, < 5000) → complete_checkout
+ *     → spend gate APPROVES, merchant answers `requires_buyer_input` (needs a
+ *     delivery phone) → adapter registers a TYPED FormBridge intake + submission
+ *     and returns an escalation whose continue_url is the human's resume URL. A
+ *     simulated human fills the phone in FormBridge and submits → FormBridge fires
+ *     the SIGNED answer-back webhook → the adapter update_checkout's the phone and
+ *     RE-DRIVES complete_checkout through the REAL spend gate → the order completes.
+ *     Finally we verify the tamper-evident AgentLens evidence chain (Tier-A).
+ *
+ * Config (env):
+ *   GATE_URL             gate MCP base            (default http://localhost:8787)
+ *   AGENTGATE_URL        AgentGate API base       (default http://localhost:4000)
+ *   AGENTGATE_API_KEY    admin agk_ key — used to POST the human approval decision
+ *   FORMBRIDGE_URL       FormBridge API base      (enables Scenario D)
+ *   AGENTLENS_URL        AgentLens base           (enables the evidence beat)
+ *
+ * Exit code 0 iff every enabled scenario passes its assertions.
  */
 import { randomUUID } from 'node:crypto';
 
@@ -35,6 +53,8 @@ const AGENTGATE_API_KEY = process.env.AGENTGATE_API_KEY ?? '';
 // AgentLens is optional — the evidence beat is skipped gracefully when unset/unreachable.
 const AGENTLENS_URL = (process.env.AGENTLENS_URL ?? '').replace(/\/+$/, '');
 const AGENTLENS_API_KEY = process.env.AGENTLENS_API_KEY ?? '';
+// FormBridge is optional — Scenario D is skipped (with a clear note) when unset.
+const FORMBRIDGE_URL = (process.env.FORMBRIDGE_URL ?? '').replace(/\/+$/, '');
 
 /** The subset of the UCP Checkout the buying agent reads back. */
 interface Checkout {
@@ -45,7 +65,7 @@ interface Checkout {
   approval_id?: string;
   continue_url?: string;
   totals?: Array<{ type: string; amount: number }>;
-  messages?: Array<{ type: string; code?: string; content?: string }>;
+  messages?: Array<{ type: string; code?: string; content?: string; severity?: string; path?: string }>;
   [k: string]: unknown;
 }
 
@@ -152,16 +172,15 @@ async function humanApproves(approvalId: string): Promise<void> {
 }
 
 /**
- * Fetch + print the Tier-A AgentLens evidence chain for this checkout. The gate
- * self-emits a hash-chained per-checkout timeline (session `ucp_<checkoutId>`);
- * here the agent independently verifies it. Best-effort: skips gracefully when
+ * Fetch the Tier-A AgentLens evidence chain for this checkout and RETURN it. The
+ * gate self-emits a hash-chained per-checkout timeline (session `ucp_<checkoutId>`);
+ * here the agent independently verifies it. Best-effort: returns undefined when
  * AgentLens is unset or unreachable (it must never fail the demo).
  */
-async function verifyEvidence(checkoutId: string): Promise<void> {
-  if (!AGENTLENS_URL) {
-    log('   (AGENTLENS_URL unset — skipping evidence verification)');
-    return;
-  }
+async function fetchEvidence(
+  checkoutId: string
+): Promise<{ verified?: boolean; totalEvents?: number; firstHash?: string | null; lastHash?: string | null } | undefined> {
+  if (!AGENTLENS_URL) return undefined;
   const sessionId = `ucp_${checkoutId}`;
   try {
     const headers: Record<string, string> = {};
@@ -171,29 +190,35 @@ async function verifyEvidence(checkoutId: string): Promise<void> {
       { headers }
     );
     if (!res.ok) {
-      log(`   ⚠ evidence verify returned HTTP ${res.status} — skipping`);
-      return;
+      log(`   ⚠ evidence verify returned HTTP ${res.status}`);
+      return undefined;
     }
-    const body = (await res.json()) as {
-      verified?: boolean;
-      totalEvents?: number;
-      firstHash?: string | null;
-      lastHash?: string | null;
-    };
-    const events = body.totalEvents ?? 0;
-    if (body.verified && events > 0) {
-      const fh = (body.firstHash ?? '').slice(0, 12);
-      const lh = (body.lastHash ?? '').slice(0, 12);
-      log(`   ✅ evidence chain verified — ${events} events, ${fh}…${lh}`);
-    } else {
-      log(`   ⚠ evidence not verified (verified=${body.verified}, events=${events})`);
-    }
+    return (await res.json()) as Awaited<ReturnType<typeof fetchEvidence>>;
   } catch (err) {
     log(`   (AgentLens unreachable — skipping evidence: ${err instanceof Error ? err.message : String(err)})`);
+    return undefined;
   }
 }
 
-async function pollUntilCompleted(client: Client, id: string, timeoutMs = 15000): Promise<Checkout> {
+/** Print a best-effort evidence chain (used by scenarios that don't hard-assert it). */
+async function verifyEvidence(checkoutId: string): Promise<void> {
+  if (!AGENTLENS_URL) {
+    log('   (AGENTLENS_URL unset — skipping evidence verification)');
+    return;
+  }
+  const body = await fetchEvidence(checkoutId);
+  if (!body) return;
+  const events = body.totalEvents ?? 0;
+  if (body.verified && events > 0) {
+    const fh = (body.firstHash ?? '').slice(0, 12);
+    const lh = (body.lastHash ?? '').slice(0, 12);
+    log(`   ✅ evidence chain verified — ${events} events, ${fh}…${lh}`);
+  } else {
+    log(`   ⚠ evidence not verified (verified=${body.verified}, events=${events})`);
+  }
+}
+
+async function pollUntilCompleted(client: Client, id: string, timeoutMs = 20000): Promise<Checkout> {
   const start = Date.now();
   let last: Checkout | undefined;
   while (Date.now() - start < timeoutMs) {
@@ -203,6 +228,64 @@ async function pollUntilCompleted(client: Client, id: string, timeoutMs = 15000)
   }
   fail(`checkout ${id} did not reach 'completed' within ${timeoutMs}ms (last status=${last?.status})`);
 }
+
+// ─── FormBridge driving (Scenario D — simulate the human) ───────────────────
+
+async function fbFetch(method: string, path: string, body?: unknown): Promise<Record<string, unknown>> {
+  const init: RequestInit = { method, headers: { 'Content-Type': 'application/json', Accept: 'application/json' } };
+  if (body !== undefined) init.body = JSON.stringify(body);
+  const res = await fetch(`${FORMBRIDGE_URL}${path}`, init);
+  const text = await res.text();
+  const json = text.length > 0 ? (JSON.parse(text) as Record<string, unknown>) : {};
+  if (!res.ok) fail(`FormBridge ${method} ${path} failed (${res.status}): ${text.slice(0, 300)}`);
+  return json;
+}
+
+/**
+ * Simulate the human resolving the typed form in FormBridge: from the escalation's
+ * continue_url (which carries the resume token), discover the submission, PATCH the
+ * missing field, then SUBMIT — which fires FormBridge's SIGNED answer-back webhook
+ * to the adapter. Returns the field key filled + the submission id.
+ */
+async function humanFillsForm(continueUrl: string, phone: string): Promise<{ submissionId: string; fieldKey: string }> {
+  const token = new URL(continueUrl).searchParams.get('token');
+  if (!token) fail(`no resume token in continue_url: ${continueUrl}`);
+
+  // Discover the submission + intake + the typed schema behind the resume token.
+  const resume = (await fbFetch('GET', `/submissions/resume/${encodeURIComponent(token)}`)) as {
+    id?: string;
+    intakeId?: string;
+    schema?: { properties?: Record<string, unknown>; required?: string[] };
+  };
+  const submissionId = resume.id;
+  const intakeId = resume.intakeId;
+  if (!submissionId || !intakeId) fail(`FormBridge resume returned no submission/intake: ${JSON.stringify(resume)}`);
+
+  // The adapter composed a TYPED single-field schema; take the (one) required field.
+  const props = resume.schema?.properties ?? {};
+  const fieldKey = resume.schema?.required?.[0] ?? Object.keys(props)[0] ?? 'buyer__phone_number';
+  log(`   FormBridge intake=${intakeId} submission=${submissionId} — typed field: ${fieldKey} (${Object.keys(props).length} field/s)`);
+
+  const human = { kind: 'human', id: 'demo:human-buyer', name: 'Demo Human' };
+  // (a) fill the missing field — the resume token ROTATES on every field mutation.
+  const patched = (await fbFetch('PATCH', `/intake/${intakeId}/submissions/${submissionId}`, {
+    resumeToken: token,
+    actor: human,
+    fields: { [fieldKey]: phone },
+  })) as { resumeToken?: string };
+  const rotated = patched.resumeToken;
+  if (!rotated) fail('FormBridge PATCH did not return a rotated resumeToken');
+  log(`   human filled ${fieldKey}=${phone}; submitting…`);
+
+  // (b) submit with the rotated token → FormBridge fires the SIGNED destination webhook.
+  await fbFetch('POST', `/intake/${intakeId}/submissions/${submissionId}/submit`, {
+    resumeToken: rotated,
+    actor: human,
+  });
+  return { submissionId, fieldKey };
+}
+
+// ─── Scenarios ──────────────────────────────────────────────────────────────
 
 async function scenarioA(client: Client): Promise<void> {
   console.log('\n================================================================');
@@ -276,11 +359,119 @@ async function scenarioB(client: Client): Promise<void> {
   console.log(`   order_id = ${completed.order_id}`);
 }
 
+async function scenarioC(client: Client): Promise<void> {
+  console.log('\n================================================================');
+  console.log('SCENARIO C — MERCHANT-NATIVE escalation (gate point 2): approved, then held');
+  console.log('================================================================');
+
+  log('C1. create_checkout: 3 × pot_ceramic (@1500) = 4500 minor (under the spend limit)');
+  const created = await createCheckout(client, 'pot_ceramic', 3);
+  log(`    created checkout ${created.id} (status=${created.status}, total=${totalMinor(created)} minor)`);
+  if (totalMinor(created) !== 4500) fail(`expected total 4500, got ${totalMinor(created)}`);
+
+  const idemKey = randomUUID();
+  log(`C2. complete_checkout (idempotency-key=${idemKey})`);
+  log('    → the spend gate APPROVES (4500 < 5000); the MERCHANT then answers with a');
+  log('      non-buyer-input requires_escalation (a bulk inventory-review hold).');
+  const completed = await completeCheckout(client, created.id, idemKey);
+  const msg = completed.messages?.[0];
+  log(`    gate/adapter responded: status=${completed.status}, code=${msg?.code}, severity=${msg?.severity}`);
+  log(`       continue_url=${completed.continue_url ?? '(none)'}`);
+  log(`       message: ${msg?.content ?? ''}`);
+
+  // The adapter must SURFACE the hold faithfully — NOT report a placed order.
+  if (completed.status !== 'requires_escalation') {
+    fail(`expected 'requires_escalation' (merchant hold surfaced), got '${completed.status}'`);
+  }
+  if (completed.order_id) fail(`merchant hold was misreported as a PLACED order (order_id=${completed.order_id})`);
+  if (!completed.continue_url) fail('expected a continue_url on the merchant hold');
+  if (msg?.severity !== 'requires_buyer_review') {
+    fail(`expected a requires_buyer_review hold, got severity '${msg?.severity}'`);
+  }
+  if (msg?.severity === 'requires_buyer_input' || msg?.path) {
+    fail('a plain merchant hold must NOT be a buyer-input escalation (no field path)');
+  }
+
+  // And the order must genuinely not be placed on the merchant either.
+  const after = await getCheckout(client, created.id);
+  if (after.status === 'completed' || after.order_id) {
+    fail(`merchant hold actually placed an order (status=${after.status}, order_id=${after.order_id})`);
+  }
+  log(`C3. get_checkout confirms the order is NOT placed → status=${after.status}, order_id=${after.order_id ?? '(none)'}`);
+
+  log('C4. 🔎 Evidence chain records the hold as an escalation, not a placed order…');
+  await verifyEvidence(created.id);
+
+  console.log(`\n   SCENARIO C RESULT: PASS — merchant escalation surfaced faithfully (hold + continue_url, NO order_id).`);
+}
+
+async function scenarioD(client: Client): Promise<void> {
+  console.log('\n================================================================');
+  console.log('SCENARIO D — BUYER-INPUT end-to-end (gate point 3): real FormBridge + real gate');
+  console.log('================================================================');
+
+  if (!FORMBRIDGE_URL) {
+    console.log('   (FORMBRIDGE_URL unset — Scenario D SKIPPED. Set FORMBRIDGE_URL to run it.)');
+    return;
+  }
+
+  log('D1. create_checkout: 1 × orchid_white (@4500) = 4500 minor (under the spend limit)');
+  const created = await createCheckout(client, 'orchid_white', 1);
+  log(`    created checkout ${created.id} (status=${created.status}, total=${totalMinor(created)} minor)`);
+  if (totalMinor(created) !== 4500) fail(`expected total 4500, got ${totalMinor(created)}`);
+
+  const idemKey = randomUUID();
+  log(`D2. complete_checkout (idempotency-key=${idemKey})`);
+  log('    → spend gate APPROVES (4500 < 5000); merchant needs a delivery phone →');
+  log('      requires_buyer_input → the adapter mints a TYPED FormBridge form.');
+  const escalated = await completeCheckout(client, created.id, idemKey);
+  const msg = escalated.messages?.[0];
+  log(`    adapter responded: status=${escalated.status}, code=${msg?.code}, severity=${msg?.severity}`);
+  log(`       continue_url (human resume)=${escalated.continue_url}`);
+
+  if (escalated.status !== 'requires_escalation') {
+    fail(`expected 'requires_escalation' (buyer-input handoff), got '${escalated.status}'`);
+  }
+  if (escalated.order_id) fail(`buyer-input escalation was misreported as a PLACED order (order_id=${escalated.order_id})`);
+  if (msg?.severity !== 'requires_buyer_input') {
+    fail(`expected a requires_buyer_input escalation, got severity '${msg?.severity}'`);
+  }
+  if (!escalated.continue_url) fail('expected a FormBridge resume continue_url');
+
+  log('D3. 🧑  A human opens the FormBridge form and supplies the delivery phone…');
+  const { submissionId, fieldKey } = await humanFillsForm(escalated.continue_url, '+15551230000');
+  log(`    → FormBridge submission ${submissionId} submitted; SIGNED answer-back webhook fired to the adapter.`);
+  log('    → adapter verifies the HMAC, update_checkout(phone), RE-DRIVES complete_checkout');
+  log('      through the REAL spend gate with the pinned idempotency-key.');
+
+  log('D4. Agent polls get_checkout until the re-driven order lands…');
+  const final = await pollUntilCompleted(client, created.id);
+  log(`    ✅ COMPLETED via FormBridge answer-back — checkout=${final.id}, order_id=${final.order_id}`);
+  if (!final.order_id) fail('completed checkout has no order_id');
+
+  log('D5. 🔎 Verify the tamper-evident AgentLens evidence chain (Tier-A) for the order…');
+  const evidence = await fetchEvidence(created.id);
+  if (AGENTLENS_URL) {
+    log(`    GET ${AGENTLENS_URL}/api/audit/verify?sessionId=ucp_${created.id}`);
+    log(`    → ${JSON.stringify(evidence)}`);
+    if (!evidence?.verified) fail(`AgentLens evidence chain not verified: ${JSON.stringify(evidence)}`);
+    if ((evidence.totalEvents ?? 0) < 1) fail('AgentLens evidence chain has no events');
+    log(`    ✅ verified:true — ${evidence.totalEvents} events (${(evidence.firstHash ?? '').slice(0, 12)}…${(evidence.lastHash ?? '').slice(0, 12)})`);
+  } else {
+    log('    (AGENTLENS_URL unset — evidence verification skipped)');
+  }
+
+  console.log(`\n   SCENARIO D RESULT: PASS — buyer-input resolved via real FormBridge; order placed via the real gate.`);
+  console.log(`   fieldKey = ${fieldKey}, order_id = ${final.order_id}`);
+}
+
 async function main(): Promise<void> {
   console.log('################################################################');
   console.log('# agentgate-ucp — end-to-end demo: unattended buying agent');
   console.log(`# gate       : ${GATE_URL}/mcp`);
   console.log(`# agentgate  : ${AGENTGATE_URL}`);
+  console.log(`# formbridge : ${FORMBRIDGE_URL || '(unset — Scenario D skipped)'}`);
+  console.log(`# agentlens  : ${AGENTLENS_URL || '(unset — evidence skipped)'}`);
   console.log('################################################################');
 
   const client = await connect();
@@ -289,14 +480,18 @@ async function main(): Promise<void> {
     log(`Connected. Gate exposes tools: ${tools.tools.map((t) => t.name).join(', ')}`);
     await scenarioA(client);
     await scenarioB(client);
+    await scenarioC(client);
+    await scenarioD(client);
   } finally {
     await client.close();
   }
 
   console.log('\n################################################################');
-  console.log('# ✅ DEMO PASSED — both scenarios asserted green.');
+  console.log('# ✅ DEMO PASSED — all enabled scenarios asserted green.');
   console.log('#   A: over-threshold buy PARKED, then completed via human approval + webhook replay.');
   console.log('#   B: under-threshold buy auto-approved and completed immediately.');
+  console.log('#   C: merchant-native escalation surfaced faithfully (hold + continue_url, NOT a placed order).');
+  console.log('#   D: merchant buyer-input resolved via real FormBridge form → re-driven through the real gate.');
   console.log('################################################################');
 }
 

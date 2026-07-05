@@ -2,46 +2,93 @@
 # agentgate-ucp — end-to-end demo: unattended buying agent
 # gate       : http://localhost:8787/mcp
 # agentgate  : http://localhost:4000
+# formbridge : http://localhost:8091
+# agentlens  : http://localhost:3000
 ################################################################
-[2026-07-04 19:01:09.693] Connected. Gate exposes tools: create_checkout, get_checkout, update_checkout, complete_checkout, cancel_checkout
+[2026-07-05 04:38:07.562] Connected. Gate exposes tools: create_checkout, get_checkout, update_checkout, complete_checkout, cancel_checkout
 
 ================================================================
 SCENARIO A — OVER the spend policy (7000 minor > 5000) → approval loop
 ================================================================
-[2026-07-04 19:01:09.694] A1. create_checkout: 2 × bouquet_roses (@3500) = 7000 minor
-[2026-07-04 19:01:09.753]     created checkout 25cb0c98-86fc-411e-bf3a-f087763927d4 (status=incomplete, total=7000 minor)
-[2026-07-04 19:01:09.753] A2. complete_checkout (idempotency-key=d1530ea2-65c6-46d0-a4f7-8ad8ac9b2688) — the agent tries to place the order
-[2026-07-04 19:01:09.769]     gate responded: status=requires_escalation, approval_id=8kfPAAmqGezHydu40p0LN
-[2026-07-04 19:01:09.769]     ⏸  PARKED. Nobody is watching the agent — approval_id=8kfPAAmqGezHydu40p0LN
-[2026-07-04 19:01:09.769]        continue_url=http://localhost:4000/requests/8kfPAAmqGezHydu40p0LN
-[2026-07-04 19:01:09.769]        message: Purchase requires approval.
-[2026-07-04 19:01:09.779] A3. get_checkout before approval → status=incomplete (order not placed yet)
-[2026-07-04 19:01:09.779] A4. 🧑  A human opens AgentGate and taps "Approve"…
-[2026-07-04 19:01:09.820]    AgentGate request 8kfPAAmqGezHydu40p0LN → status=approved (decidedBy=demo:human-reviewer)
-[2026-07-04 19:01:09.820]     → AgentGate fires the decision webhook → the gate replays the completion
-[2026-07-04 19:01:09.820]       with the ORIGINAL idempotency-key.
-[2026-07-04 19:01:09.820] A5. Agent polls get_checkout until the order lands…
-[2026-07-04 19:01:09.829]     ✅ COMPLETED via webhook resume — checkout=25cb0c98-86fc-411e-bf3a-f087763927d4, order_id=ord_f48bff5c-7ba9-41b9-a9c5-14ccf004d943
-[2026-07-04 19:01:09.829] A6. 🔎 Verify the tamper-evident AgentLens evidence chain for this checkout…
-[2026-07-04 19:01:09.829]     (the gate self-emitted received → decision → parked → replayed on ucp_25cb0c98-86fc-411e-bf3a-f087763927d4)
-[2026-07-04 19:01:09.861]    ✅ evidence chain verified — 4 events, e1ed3dc865c0…ab72c960ee33
+[2026-07-05 04:38:07.563] A1. create_checkout: 2 × bouquet_roses (@3500) = 7000 minor
+[2026-07-05 04:38:07.617]     created checkout 2df7962b-afdc-43a0-acab-5f1631f99b97 (status=incomplete, total=7000 minor)
+[2026-07-05 04:38:07.617] A2. complete_checkout (idempotency-key=f0ca6645-d628-4e52-8c6c-c9da2b5edb43) — the agent tries to place the order
+[2026-07-05 04:38:07.633]     gate responded: status=requires_escalation, approval_id=8Krnh99ZgyhFsodJGvcp5
+[2026-07-05 04:38:07.633]     ⏸  PARKED. Nobody is watching the agent — approval_id=8Krnh99ZgyhFsodJGvcp5
+[2026-07-05 04:38:07.633]        continue_url=http://localhost:4000/requests/8Krnh99ZgyhFsodJGvcp5
+[2026-07-05 04:38:07.633]        message: Purchase requires approval.
+[2026-07-05 04:38:07.642] A3. get_checkout before approval → status=incomplete (order not placed yet)
+[2026-07-05 04:38:07.642] A4. 🧑  A human opens AgentGate and taps "Approve"…
+[2026-07-05 04:38:07.684]    AgentGate request 8Krnh99ZgyhFsodJGvcp5 → status=approved (decidedBy=demo:human-reviewer)
+[2026-07-05 04:38:07.684]     → AgentGate fires the decision webhook → the gate replays the completion
+[2026-07-05 04:38:07.684]       with the ORIGINAL idempotency-key.
+[2026-07-05 04:38:07.684] A5. Agent polls get_checkout until the order lands…
+[2026-07-05 04:38:07.693]     ✅ COMPLETED via webhook resume — checkout=2df7962b-afdc-43a0-acab-5f1631f99b97, order_id=ord_6b00a563-bc81-44f8-872d-1bac051a8592
+[2026-07-05 04:38:07.693] A6. 🔎 Verify the tamper-evident AgentLens evidence chain for this checkout…
+[2026-07-05 04:38:07.693]     (the gate self-emitted received → decision → parked → replayed on ucp_2df7962b-afdc-43a0-acab-5f1631f99b97)
+[2026-07-05 04:38:07.697]    ✅ evidence chain verified — 4 events, 10654d33b696…e0b2bcb97f92
 
    SCENARIO A RESULT: PASS — parked over-threshold buy completed only after human approval.
-   order_id = ord_f48bff5c-7ba9-41b9-a9c5-14ccf004d943
+   order_id = ord_6b00a563-bc81-44f8-872d-1bac051a8592
 
 ================================================================
 SCENARIO B — UNDER the spend policy (3500 minor < 5000) → auto-approve
 ================================================================
-[2026-07-04 19:01:09.861] B1. create_checkout: 1 × bouquet_roses (@3500) = 3500 minor
-[2026-07-04 19:01:09.877]     created checkout dc96b299-2d55-46ac-bc6d-37066ed59242 (status=incomplete, total=3500 minor)
-[2026-07-04 19:01:09.877] B2. complete_checkout (idempotency-key=5d462c10-16e9-42ce-a19e-396b502a2d11)
-[2026-07-04 19:01:09.914]     gate responded: status=completed, order_id=ord_5a5c3f94-9ec0-4bfb-8840-244aae960d32
+[2026-07-05 04:38:07.697] B1. create_checkout: 1 × bouquet_roses (@3500) = 3500 minor
+[2026-07-05 04:38:07.711]     created checkout 43e1794a-1135-4a49-a2d7-8d62c6412294 (status=incomplete, total=3500 minor)
+[2026-07-05 04:38:07.711] B2. complete_checkout (idempotency-key=69c18885-a688-425e-945e-2245cd886dd1)
+[2026-07-05 04:38:07.746]     gate responded: status=completed, order_id=ord_b687c830-a7a5-496c-bc57-78500e25ad13
 
    SCENARIO B RESULT: PASS — under-threshold buy completed immediately, no human in the loop.
-   order_id = ord_5a5c3f94-9ec0-4bfb-8840-244aae960d32
+   order_id = ord_b687c830-a7a5-496c-bc57-78500e25ad13
+
+================================================================
+SCENARIO C — MERCHANT-NATIVE escalation (gate point 2): approved, then held
+================================================================
+[2026-07-05 04:38:07.747] C1. create_checkout: 3 × pot_ceramic (@1500) = 4500 minor (under the spend limit)
+[2026-07-05 04:38:07.762]     created checkout a72e088d-2935-47d7-94ee-3b993f93087e (status=incomplete, total=4500 minor)
+[2026-07-05 04:38:07.762] C2. complete_checkout (idempotency-key=a52555a2-6335-4693-9f2c-74a9d038bdcf)
+[2026-07-05 04:38:07.762]     → the spend gate APPROVES (4500 < 5000); the MERCHANT then answers with a
+[2026-07-05 04:38:07.762]       non-buyer-input requires_escalation (a bulk inventory-review hold).
+[2026-07-05 04:38:07.788]     gate/adapter responded: status=requires_escalation, code=inventory_hold, severity=requires_buyer_review
+[2026-07-05 04:38:07.788]        continue_url=http://localhost:3100/holds/a72e088d-2935-47d7-94ee-3b993f93087e
+[2026-07-05 04:38:07.788]        message: Item on inventory hold, review required.
+[2026-07-05 04:38:07.799] C3. get_checkout confirms the order is NOT placed → status=requires_escalation, order_id=(none)
+[2026-07-05 04:38:07.799] C4. 🔎 Evidence chain records the hold as an escalation, not a placed order…
+[2026-07-05 04:38:07.802]    ✅ evidence chain verified — 3 events, 9f3cda30a969…d51c79bd61f8
+
+   SCENARIO C RESULT: PASS — merchant escalation surfaced faithfully (hold + continue_url, NO order_id).
+
+================================================================
+SCENARIO D — BUYER-INPUT end-to-end (gate point 3): real FormBridge + real gate
+================================================================
+[2026-07-05 04:38:07.802] D1. create_checkout: 1 × orchid_white (@4500) = 4500 minor (under the spend limit)
+[2026-07-05 04:38:07.819]     created checkout f564173a-89ec-4c0f-a203-36df1795dad3 (status=incomplete, total=4500 minor)
+[2026-07-05 04:38:07.819] D2. complete_checkout (idempotency-key=2c9e49e7-dd65-4791-9b51-b39c40a70a01)
+[2026-07-05 04:38:07.819]     → spend gate APPROVES (4500 < 5000); merchant needs a delivery phone →
+[2026-07-05 04:38:07.819]       requires_buyer_input → the adapter mints a TYPED FormBridge form.
+[2026-07-05 04:38:07.874]     adapter responded: status=requires_escalation, code=buyer_input_required, severity=requires_buyer_input
+[2026-07-05 04:38:07.874]        continue_url (human resume)=http://localhost:8091/resume?token=rtok_a03f147c-4c94-4e56-ae21-708514de657f
+[2026-07-05 04:38:07.874] D3. 🧑  A human opens the FormBridge form and supplies the delivery phone…
+[2026-07-05 04:38:07.877]    FormBridge intake=ucp-buyer-input-f564173a-89ec-4c0f-a203-36df1795dad3 submission=sub_5ce7740a-5c5f-43d5-86da-06b6ffb2d2a2 — typed field: buyer__phone_number (1 field/s)
+[2026-07-05 04:38:07.896]    human filled buyer__phone_number=+15551230000; submitting…
+[2026-07-05 04:38:07.902]     → FormBridge submission sub_5ce7740a-5c5f-43d5-86da-06b6ffb2d2a2 submitted; SIGNED answer-back webhook fired to the adapter.
+[2026-07-05 04:38:07.902]     → adapter verifies the HMAC, update_checkout(phone), RE-DRIVES complete_checkout
+[2026-07-05 04:38:07.902]       through the REAL spend gate with the pinned idempotency-key.
+[2026-07-05 04:38:07.902] D4. Agent polls get_checkout until the re-driven order lands…
+[2026-07-05 04:38:08.420]     ✅ COMPLETED via FormBridge answer-back — checkout=f564173a-89ec-4c0f-a203-36df1795dad3, order_id=ord_5b7bf43b-2c85-4f95-9aa7-44511c6beb92
+[2026-07-05 04:38:08.420] D5. 🔎 Verify the tamper-evident AgentLens evidence chain (Tier-A) for the order…
+[2026-07-05 04:38:08.423]     GET http://localhost:3000/api/audit/verify?sessionId=ucp_f564173a-89ec-4c0f-a203-36df1795dad3
+[2026-07-05 04:38:08.423]     → {"verified":true,"verifiedAt":"2026-07-05T04:38:08.419Z","range":null,"sessionId":"ucp_f564173a-89ec-4c0f-a203-36df1795dad3","sessionsVerified":1,"totalEvents":8,"firstHash":"5714f9b3df47b5068dba734df657841a48b6464b21a5ee363c3164a5c2df0829","lastHash":"0dce8eb39a098c1852f8f4c7a0bcdecdfb970c303881114aa88b94803e2d700f","brokenChains":[],"signature":null}
+[2026-07-05 04:38:08.423]     ✅ verified:true — 8 events (5714f9b3df47…0dce8eb39a09)
+
+   SCENARIO D RESULT: PASS — buyer-input resolved via real FormBridge; order placed via the real gate.
+   fieldKey = buyer__phone_number, order_id = ord_5b7bf43b-2c85-4f95-9aa7-44511c6beb92
 
 ################################################################
-# ✅ DEMO PASSED — both scenarios asserted green.
+# ✅ DEMO PASSED — all enabled scenarios asserted green.
 #   A: over-threshold buy PARKED, then completed via human approval + webhook replay.
 #   B: under-threshold buy auto-approved and completed immediately.
+#   C: merchant-native escalation surfaced faithfully (hold + continue_url, NOT a placed order).
+#   D: merchant buyer-input resolved via real FormBridge form → re-driven through the real gate.
 ################################################################
