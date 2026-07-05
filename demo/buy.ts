@@ -262,44 +262,92 @@ async function verifyTierBEvidence(fromIso: string): Promise<void> {
   }
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (AGENTLENS_API_KEY) headers['Authorization'] = `Bearer ${AGENTLENS_API_KEY}`;
-  const to = new Date(Date.now() + 60_000).toISOString();
-  try {
-    const exportRes = await fetch(`${AGENTLENS_URL}/api/audit/evidence/export`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ agentId, from: fromIso, to, types: ['custom'] }),
-    });
-    if (!exportRes.ok) {
-      log(`   (Tier-B skipped — evidence export returned HTTP ${exportRes.status})`);
-      return;
+
+  type EvidencePack = {
+    totalEvents?: number;
+    chains?: Array<{ sessionId?: string; verified?: boolean }>;
+    signature?: { type?: string; alg?: string; value?: string } | null;
+  };
+  // Export the signed pack. Returns null on a network error / non-2xx — a clean SKIP
+  // signal (the server may not offer export, or be unreachable). Once a SIGNED pack
+  // comes back, Tier-B is proven-configured and a bad proof FAILS the demo (below).
+  const exportPack = async (): Promise<EvidencePack | null> => {
+    const to = new Date(Date.now() + 60_000).toISOString();
+    try {
+      const res = await fetch(`${AGENTLENS_URL}/api/audit/evidence/export`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ agentId, from: fromIso, to, types: ['custom'] }),
+      });
+      if (!res.ok) {
+        log(`   (Tier-B skipped — evidence export returned HTTP ${res.status})`);
+        return null;
+      }
+      return (await res.json()) as EvidencePack;
+    } catch (err) {
+      log(`   (Tier-B skipped — AgentLens unreachable: ${err instanceof Error ? err.message : String(err)})`);
+      return null;
     }
-    const pack = (await exportRes.json()) as {
-      totalEvents?: number;
-      signature?: { type?: string; alg?: string; value?: string } | null;
-    };
-    if (!pack.signature) {
-      log('   (Tier-B skipped — AgentLens returned an UNSIGNED pack; set AGENTLENS_AUDIT_SIGNING_KEY on the server)');
-      return;
-    }
-    if (!pack.totalEvents) {
-      log(`   ⚠ Tier-B: signed pack but 0 verified-agent events — did the gate send AGENTLENS_AGENT_TOKEN (sub=${agentId})?`);
-      return;
-    }
-    const verifyRes = await fetch(`${AGENTLENS_URL}/api/audit/evidence/verify`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(pack),
-    });
-    const verifyBody = (await verifyRes.json()) as { valid?: boolean };
-    if (verifyRes.ok && verifyBody.valid) {
-      const sigPreview = `${pack.signature.type}/${pack.signature.alg}:${(pack.signature.value ?? '').slice(0, 12)}…`;
-      log(`   ✅ Tier-B: SIGNED pack for verified agent ${agentId} — ${pack.totalEvents} events, ${sigPreview} verifies OFFLINE (valid:true)`);
-    } else {
-      log(`   ⚠ Tier-B: pack did NOT verify (HTTP ${verifyRes.status}, valid=${verifyBody.valid})`);
-    }
-  } catch (err) {
-    log(`   (Tier-B skipped — AgentLens unreachable: ${err instanceof Error ? err.message : String(err)})`);
+  };
+
+  let pack = await exportPack();
+  if (!pack) return; // network/export failure → skip cleanly
+  if (!pack.signature) {
+    log('   (Tier-B skipped — AgentLens returned an UNSIGNED pack; set AGENTLENS_AUDIT_SIGNING_KEY on the server)');
+    return;
   }
+
+  // Tier-B IS enabled (a signed pack came back) ⇒ from here a bad proof FAILS the demo.
+  // The gate's evidence POSTs are fire-and-forget, so poll until the event count SETTLES
+  // (two equal, non-zero consecutive reads) before trusting the snapshot — otherwise the
+  // export can race the run's final events and sign an INCOMPLETE pack that still passes.
+  for (let i = 0; i < 20; i++) {
+    await sleep(250);
+    const next = await exportPack();
+    if (!next || !next.signature) break; // keep the last good signed pack
+    const settled = next.totalEvents !== undefined && next.totalEvents === pack.totalEvents;
+    pack = next;
+    if (settled && (pack.totalEvents ?? 0) > 0) break;
+  }
+
+  if (!pack.totalEvents) {
+    fail(
+      `Tier-B: signed pack but 0 verified-agent events — the gate's AGENTLENS_AGENT_TOKEN (sub=${agentId}) was not stamped as a verified_agent_id`
+    );
+  }
+  // The pack HMAC and the per-chain hash proofs are INDEPENDENT: /verify only recomputes
+  // the pack signature, so a signed pack can still carry a broken (verified:false) chain.
+  // Require every included chain proof to hold — not just the outer signature.
+  const chains = pack.chains ?? [];
+  const brokenChains = chains.filter((c) => c.verified !== true);
+  if (brokenChains.length > 0) {
+    fail(
+      `Tier-B: signed pack contains ${brokenChains.length}/${chains.length} UNVERIFIED chain(s) — a broken hash chain must not pass as proof`
+    );
+  }
+
+  // Offline signature verification (HMAC recompute over the canonical body).
+  const verifyRes = await fetch(`${AGENTLENS_URL}/api/audit/evidence/verify`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(pack),
+  });
+  const verifyBody = (await verifyRes.json().catch(() => ({}))) as { valid?: boolean };
+  if (!verifyRes.ok || !verifyBody.valid) {
+    fail(
+      `Tier-B: signed pack did NOT verify OFFLINE (HTTP ${verifyRes.status}, valid=${verifyBody.valid}) — a signed proof that fails verification is a FAILURE, not a pass`
+    );
+  }
+
+  // pack.signature is guaranteed set here (checked pre-loop; the poll loop only ever
+  // keeps a signed pack), but reassigning `pack` in the loop widens the type — re-narrow.
+  const sig = pack.signature;
+  const sigPreview = sig
+    ? `${sig.type}/${sig.alg}:${(sig.value ?? '').slice(0, 12)}…`
+    : 'signed';
+  log(
+    `   ✅ Tier-B: SIGNED pack for verified agent ${agentId} — ${pack.totalEvents} events, ${chains.length} chain(s) all verified, ${sigPreview} verifies OFFLINE (valid:true)`
+  );
 }
 
 async function pollUntilCompleted(client: Client, id: string, timeoutMs = 20000): Promise<Checkout> {
