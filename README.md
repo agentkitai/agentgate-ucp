@@ -2,6 +2,8 @@
 
 **The approval gate for unattended UCP buying agents.**
 
+![A gated purchase, animated — an unattended agent places an order, the gate parks it over budget, a human approves at their computer, and it completes with a verifiable evidence trail.](docs/agentgate-ucp-demo.gif)
+
 A thin MCP server ("the gate") that a buying agent connects to *instead of* a
 merchant's [UCP](https://github.com/universal-commerce-protocol) checkout
 endpoint. It re-exposes the UCP checkout tools 1:1 and passes everything through
