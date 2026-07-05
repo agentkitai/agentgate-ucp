@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+</head>
+<body>
+<title>A purchase that runs itself — agentgate-ucp</title>
+<style>
+  :root{
+    --paper:#EFEEE9; --stage:#F6F5F1; --ink:#1C1F26; --muted:#585B62; --faint:#8A8C90;
+    --line:#3A3E47; --rule:#D8D5CC;
+    --accent:#B26E12; --accent-soft:#E7D6B6; --ok:#2F7168; --ok-soft:#CFE4DF;
+    --skin:#C9A98C; --sky:#CBD6DE; --screen:#20242E;
+    --shirt:#5E7C87; --shirt2:#B07C3A; --hair:#6E523C;
+    --serif:'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif;
+    --sans:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    --mono:'SF Mono',ui-monospace,'JetBrains Mono','Cascadia Code',Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#0F1219; --stage:#161A23; --ink:#E7E6E0; --muted:#A1A4AD; --faint:#6C707A;
+      --line:#C4C7CE; --rule:#2A2F3B;
+      --accent:#E7A44C; --accent-soft:#3A2E1B; --ok:#63ADA2; --ok-soft:#1E2E2C;
+      --skin:#B89475; --sky:#2A3340; --screen:#0A0C11;
+    }
+  }
+  :root[data-theme="dark"]{--paper:#0F1219;--stage:#161A23;--ink:#E7E6E0;--muted:#A1A4AD;--faint:#6C707A;--line:#C4C7CE;--rule:#2A2F3B;--accent:#E7A44C;--accent-soft:#3A2E1B;--ok:#63ADA2;--ok-soft:#1E2E2C;--skin:#B89475;--sky:#2A3340;--screen:#0A0C11;}
+  :root[data-theme="light"]{--paper:#EFEEE9;--stage:#F6F5F1;--ink:#1C1F26;--muted:#585B62;--faint:#8A8C90;--line:#3A3E47;--rule:#D8D5CC;--accent:#B26E12;--accent-soft:#E7D6B6;--ok:#2F7168;--ok-soft:#CFE4DF;--skin:#C9A98C;--sky:#CBD6DE;--screen:#20242E;}
+
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:58rem;margin:0 auto;padding:2rem 1.1rem 3rem;}
+  .eyebrow{font-family:var(--mono);font-size:.7rem;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);font-weight:600;}
+  h1{font-family:var(--serif);font-weight:600;font-size:clamp(1.7rem,4.4vw,2.5rem);line-height:1.07;letter-spacing:-.015em;margin:.6rem 0 1.1rem;text-wrap:balance;}
+
+  /* stage */
+  .stage{position:relative;width:100%;aspect-ratio:16/10;background:var(--stage);border:1px solid var(--rule);
+    border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.06),0 18px 46px rgba(0,0,0,.10);}
+  .scene{position:absolute;inset:0;opacity:0;transform:scale(1);transform-origin:center 46%;
+    transition:transform 1.35s cubic-bezier(.5,.05,.25,1),opacity .95s ease;pointer-events:none;will-change:transform,opacity;}
+  .scene svg{width:100%;height:100%;display:block;}
+
+  /* line-art defaults */
+  .stroke{fill:none;stroke:var(--line);stroke-width:3.4;stroke-linecap:round;stroke-linejoin:round;}
+  .thin{stroke-width:2.4;}
+  .fillp{fill:var(--stage);}
+  .fillm{fill:var(--paper);}
+  .amber{fill:var(--accent);} .ambers{stroke:var(--accent);} .okf{fill:var(--ok);} .oks{stroke:var(--ok);}
+  .lbl{font-family:var(--mono);font-size:13px;fill:var(--muted);font-weight:600;letter-spacing:.02em;}
+  .lbl.big{font-family:var(--sans);font-size:15px;fill:var(--ink);font-weight:650;}
+
+  /* diagram bits */
+  .edge{fill:none;stroke:var(--rule);stroke-width:3;transition:stroke .3s;}
+  .edge.live{stroke:var(--accent);} .edge.live.ok{stroke:var(--ok);}
+  .gatebox{fill:var(--stage);stroke:var(--line);stroke-width:3.4;transition:stroke .35s,fill .35s;}
+  .gatebox.hold{stroke:var(--accent);stroke-dasharray:8 5;}
+  .gatebox.ok{stroke:var(--ok);fill:color-mix(in srgb,var(--ok-soft) 55%,var(--stage));}
+  #pkt{opacity:0;transition:opacity .2s;}
+  #pkt circle{fill:var(--accent);stroke:var(--stage);stroke-width:3;filter:drop-shadow(0 0 7px color-mix(in srgb,var(--accent) 55%,transparent));}
+  #pkt.ok circle{fill:var(--ok);}
+  #pkt rect{fill:var(--stage);stroke:var(--rule);stroke-width:1.5;}
+  #pkt text{font-family:var(--mono);font-size:12px;font-weight:600;fill:var(--ink);}
+  .pop{opacity:0;transform-box:fill-box;transform-origin:center;transition:opacity .4s,transform .4s cubic-bezier(.2,1.4,.4,1);}
+  .pop.show{opacity:1;transform:scale(1);} .pop{transform:scale(.4);}
+
+  /* ledger ticks */
+  .tick{opacity:0;transition:opacity .35s;} .tick.show{opacity:1;}
+
+  /* approve button */
+  .apvbtn{fill:var(--accent);transition:fill .3s;} .apvbtn.done{fill:var(--ok);}
+  .ripple{fill:none;stroke:var(--accent);stroke-width:3;opacity:0;transform-box:fill-box;transform-origin:center;}
+  .ripple.go{animation:rip .7s ease-out;}
+  @keyframes rip{0%{opacity:.7;transform:scale(.3);}100%{opacity:0;transform:scale(1.9);}}
+  .zzz{opacity:0;transition:opacity .5s;} .zzz.show{opacity:.8;}
+
+  /* narration + controls */
+  .narr{margin:1rem 0 0;min-height:3.2rem;display:flex;gap:.7rem;align-items:flex-start;}
+  .narr .beat{font-family:var(--mono);font-size:.72rem;color:var(--accent);font-weight:700;flex:0 0 auto;padding-top:.18rem;letter-spacing:.05em;}
+  .narr .txt{font-family:var(--serif);font-size:clamp(1.02rem,2.5vw,1.24rem);line-height:1.4;color:var(--ink);text-wrap:pretty;}
+  .narr .txt b{color:var(--accent-ink,var(--accent));font-style:normal;}
+  .controls{display:flex;align-items:center;gap:.9rem;margin-top:1.1rem;}
+  .replay{font-family:var(--mono);font-size:.8rem;font-weight:600;color:var(--ink);background:var(--stage);
+    border:1px solid var(--rule);border-radius:9px;padding:.55rem .9rem;cursor:pointer;display:inline-flex;gap:.45rem;align-items:center;transition:border-color .15s;}
+  .replay:hover{border-color:var(--accent);}
+  .dots{display:flex;gap:.4rem;}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--rule);transition:background .3s,transform .3s;}
+  .dot.on{background:var(--accent);transform:scale(1.25);}
+  .dot.done{background:var(--ok);}
+  footer{margin-top:1.4rem;font-family:var(--mono);font-size:.72rem;color:var(--faint);}
+  footer a{color:var(--accent);text-decoration:none;}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:8px;}
+  @media (prefers-reduced-motion:reduce){.scene{transition:opacity .2s;} #pkt{transition:none;}}
+</style>
+
+<div class="wrap">
+  <div class="eyebrow">agentgate × ucp</div>
+  <h1>A purchase that runs itself</h1>
+
+  <div class="stage" id="stage">
+
+    <!-- ============ SCENE: BUYER ============ -->
+    <div class="scene" id="s-buyer">
+      <svg viewBox="0 0 800 500" role="img" aria-label="A person at a desk while an agent places an order">
+        <!-- window + night -->
+        <rect class="stroke thin fillm" x="70" y="70" width="150" height="120" rx="8"></rect>
+        <line class="stroke thin" x1="145" y1="70" x2="145" y2="190"></line>
+        <line class="stroke thin" x1="70" y1="130" x2="220" y2="130"></line>
+        <circle class="amber" cx="185" cy="105" r="13" opacity=".9"></circle>
+        <circle cx="110" cy="100" r="2" fill="var(--muted)"></circle><circle cx="120" cy="150" r="2" fill="var(--muted)"></circle>
+        <!-- desk -->
+        <rect class="stroke fillp" x="120" y="360" width="560" height="26" rx="6"></rect>
+        <line class="stroke thin" x1="175" y1="386" x2="175" y2="452"></line>
+        <line class="stroke thin" x1="625" y1="386" x2="625" y2="452"></line>
+        <!-- monitor -->
+        <rect class="stroke fillp" x="300" y="200" width="220" height="140" rx="9"></rect>
+        <rect x="312" y="212" width="196" height="116" rx="5" fill="var(--screen)"></rect>
+        <line class="stroke thin" x1="410" y1="340" x2="410" y2="360"></line>
+        <rect class="stroke fillp" x="380" y="356" width="60" height="7" rx="3"></rect>
+        <!-- screen content: agent buying -->
+        <g id="buy-screen">
+          <rect x="330" y="230" width="120" height="12" rx="6" fill="var(--faint)"></rect>
+          <rect x="330" y="252" width="80" height="12" rx="6" fill="var(--faint)" opacity=".6"></rect>
+          <g id="buy-cart">
+            <rect class="amber" x="330" y="286" width="150" height="24" rx="6" opacity=".95"></rect>
+            <text x="405" y="303" text-anchor="middle" font-family="var(--mono)" font-size="12" font-weight="700" fill="var(--screen)">auto-reorder →</text>
+          </g>
+          <g id="buy-done" opacity="0">
+            <circle cx="360" cy="298" r="15" fill="none" stroke="var(--ok)" stroke-width="3"></circle>
+            <path d="M353,298 l5,6 l11,-13" fill="none" stroke="var(--ok)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>
+            <text x="386" y="303" font-family="var(--mono)" font-size="12" font-weight="700" fill="var(--ok)">order confirmed</text>
+          </g>
+        </g>
+        <!-- keyboard -->
+        <rect class="stroke thin fillp" x="345" y="366" width="130" height="0" ></rect>
+        <!-- person: seated at the desk, three-quarter, facing the monitor -->
+        <g id="buy-person">
+          <!-- chair back -->
+          <rect x="614" y="262" width="16" height="100" rx="8" fill="var(--stage)" stroke="var(--line)" stroke-width="3"></rect>
+          <!-- arm reaching to the keyboard -->
+          <path fill="none" stroke="var(--shirt)" stroke-width="17" stroke-linecap="round" d="M566,290 Q520,302 486,346"></path>
+          <circle cx="484" cy="348" r="8.5" fill="var(--skin)" stroke="var(--line)" stroke-width="2.6"></circle>
+          <!-- torso -->
+          <path fill="var(--shirt)" stroke="var(--line)" stroke-width="3" stroke-linejoin="round" d="M550,270 Q575,256 600,270 L607,354 Q607,362 599,362 L551,362 Q543,362 543,354 Z"></path>
+          <!-- neck -->
+          <rect x="567" y="248" width="16" height="16" fill="var(--skin)" stroke="var(--line)" stroke-width="2.6"></rect>
+          <!-- head -->
+          <circle cx="575" cy="228" r="23" fill="var(--skin)" stroke="var(--line)" stroke-width="3"></circle>
+          <!-- hair -->
+          <path fill="var(--hair)" d="M552,230 Q550,205 575,205 Q600,205 598,230 Q590,216 575,216 Q560,216 552,230 Z"></path>
+        </g>
+        <!-- zzz (unattended) -->
+        <g class="zzz" id="buy-zzz">
+          <text x="590" y="150" font-family="var(--serif)" font-size="20" fill="var(--muted)">z</text>
+          <text x="606" y="134" font-family="var(--serif)" font-size="26" fill="var(--muted)">z</text>
+          <text x="626" y="116" font-family="var(--serif)" font-size="32" fill="var(--muted)">z</text>
+        </g>
+        <text class="lbl" x="410" y="482" text-anchor="middle">the buyer’s agent — unattended</text>
+      </svg>
+    </div>
+
+    <!-- ============ SCENE: DIAGRAM ============ -->
+    <div class="scene" id="s-diagram">
+      <svg viewBox="0 0 800 500" role="img" aria-label="Data flowing from the buyer through the gate to the vendor">
+        <path class="edge" id="d-e1" d="M196,250 L318,250"></path>
+        <path class="edge" id="d-e2" d="M482,250 L604,250"></path>
+        <!-- buyer glyph -->
+        <g>
+          <rect class="stroke thin fillp" x="96" y="214" width="100" height="72" rx="9"></rect>
+          <circle class="stroke thin fillp" cx="146" cy="244" r="13"></circle>
+          <path class="stroke thin" d="M128,272 q18,-16 36,0"></path>
+          <text class="lbl" x="146" y="308" text-anchor="middle">buyer</text>
+        </g>
+        <!-- GATE -->
+        <g>
+          <rect class="gatebox" id="d-gate" x="318" y="196" width="164" height="108" rx="14"></rect>
+          <path class="stroke ambers" id="d-shield" d="M400,222 l24,9 v18 q0,22 -24,33 q-24,-11 -24,-33 v-18 z"></path>
+          <text class="lbl big" x="400" y="292" text-anchor="middle">the gate</text>
+        </g>
+        <!-- vendor -->
+        <g>
+          <rect class="stroke thin fillp" x="604" y="210" width="104" height="80" rx="9"></rect>
+          <path class="stroke thin" d="M622,232 h68 M622,250 h68 M622,268 h44"></path>
+          <text class="lbl" x="656" y="312" text-anchor="middle">vendor</text>
+          <g class="pop" id="d-placed">
+            <circle cx="656" cy="250" r="20" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="3"></circle>
+            <path d="M647,250 l6,7 l14,-16" fill="none" stroke="var(--ok)" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"></path>
+          </g>
+        </g>
+        <!-- hold badge on gate -->
+        <g class="pop" id="d-hold">
+          <rect x="352" y="150" width="96" height="30" rx="15" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="2.5"></rect>
+          <text x="400" y="170" text-anchor="middle" font-family="var(--mono)" font-size="13" font-weight="700" fill="var(--accent)">PARKED</text>
+        </g>
+        <!-- AgentLens ledger ticks -->
+        <g transform="translate(360,330)">
+          <text class="lbl" x="40" y="14" text-anchor="middle" font-size="11">AgentLens · evidence</text>
+          <g id="d-ticks">
+            <circle class="tick" cx="4"  cy="34" r="5" fill="var(--ok)"></circle>
+            <circle class="tick" cx="24" cy="34" r="5" fill="var(--ok)"></circle>
+            <circle class="tick" cx="44" cy="34" r="5" fill="var(--ok)"></circle>
+            <circle class="tick" cx="64" cy="34" r="5" fill="var(--ok)"></circle>
+            <circle class="tick" cx="84" cy="34" r="5" fill="var(--ok)"></circle>
+          </g>
+        </g>
+        <!-- packet -->
+        <g id="pkt"><rect x="-46" y="-30" width="92" height="18" rx="4"></rect><text x="0" y="-17" text-anchor="middle"></text><circle cx="0" cy="0" r="7"></circle></g>
+      </svg>
+    </div>
+
+    <!-- ============ SCENE: APPROVER ============ -->
+    <div class="scene" id="s-approver">
+      <svg viewBox="0 0 800 500" role="img" aria-label="A person at a computer approving the request">
+        <!-- floor + desk (desk under the monitor only, so the person stands beside it) -->
+        <line x1="40" y1="474" x2="760" y2="474" stroke="var(--rule)" stroke-width="2"></line>
+        <rect class="stroke fillp" x="150" y="398" width="352" height="22" rx="6"></rect>
+        <line class="stroke thin" x1="200" y1="420" x2="200" y2="474"></line>
+        <line class="stroke thin" x1="452" y1="420" x2="452" y2="474"></line>
+        <!-- monitor (their computer) -->
+        <rect class="stroke fillp" x="196" y="150" width="288" height="212" rx="11"></rect>
+        <rect x="210" y="164" width="260" height="184" rx="6" fill="var(--screen)"></rect>
+        <line class="stroke thin" x1="340" y1="362" x2="340" y2="388"></line>
+        <rect class="stroke fillp" x="304" y="386" width="72" height="9" rx="4"></rect>
+        <!-- approval card on screen -->
+        <text x="236" y="200" font-family="var(--mono)" font-size="12" font-weight="700" fill="var(--faint)">APPROVAL NEEDED</text>
+        <text x="236" y="246" font-family="var(--sans)" font-size="34" font-weight="700" fill="#ECE9E1">$210.00</text>
+        <text x="236" y="270" font-family="var(--mono)" font-size="11" fill="var(--faint)">auto-reorder · over the limit</text>
+        <g id="apv">
+          <rect x="228" y="300" width="94" height="38" rx="8" fill="none" stroke="var(--rule)" stroke-width="1.6"></rect>
+          <text x="275" y="324" text-anchor="middle" font-family="var(--mono)" font-size="13" font-weight="600" fill="var(--faint)">Deny</text>
+          <circle class="ripple" id="apv-rip" cx="394" cy="319" r="38"></circle>
+          <rect class="apvbtn" id="apv-btn" x="338" y="300" width="112" height="38" rx="8"></rect>
+          <text id="apv-txt" x="394" y="324" text-anchor="middle" font-family="var(--mono)" font-size="14" font-weight="700" fill="var(--stage)">Approve</text>
+          <path id="apv-check" d="M383,319 l7,8 l16,-18" fill="none" stroke="var(--stage)" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" opacity="0"></path>
+        </g>
+        <!-- person: standing ON THE FLOOR, right of the desk, reaching in to click Approve -->
+        <g id="approver-person">
+          <!-- legs (hips → feet on the floor line) -->
+          <path fill="none" stroke="var(--line)" stroke-width="19" stroke-linecap="round" d="M548,342 l-6,126 M576,342 l6,126"></path>
+          <path fill="none" stroke="var(--line)" stroke-width="11" stroke-linecap="round" d="M534,471 h18 M580,471 h18"></path>
+          <!-- back arm (relaxed) -->
+          <path fill="none" stroke="var(--shirt2)" stroke-width="16" stroke-linecap="round" d="M582,266 Q602,308 592,348"></path>
+          <!-- torso -->
+          <path fill="var(--shirt2)" stroke="var(--line)" stroke-width="3" stroke-linejoin="round" d="M532,252 Q560,238 588,252 L596,340 Q596,348 588,348 L530,348 Q522,348 522,340 Z"></path>
+          <!-- front arm reaching in to Approve -->
+          <path fill="none" stroke="var(--shirt2)" stroke-width="16" stroke-linecap="round" d="M536,266 Q470,292 398,314"></path>
+          <circle cx="394" cy="316" r="9" fill="var(--skin)" stroke="var(--line)" stroke-width="2.6"></circle>
+          <!-- neck -->
+          <rect x="552" y="230" width="16" height="20" fill="var(--skin)" stroke="var(--line)" stroke-width="2.6"></rect>
+          <!-- head -->
+          <circle cx="560" cy="208" r="24" fill="var(--skin)" stroke="var(--line)" stroke-width="3"></circle>
+          <!-- hair -->
+          <path fill="var(--hair)" d="M537,210 Q535,184 560,184 Q585,184 583,210 Q574,195 560,195 Q546,195 537,210 Z"></path>
+        </g>
+        <text class="lbl" x="400" y="486" text-anchor="middle">a human approves — out of band</text>
+      </svg>
+    </div>
+
+  </div>
+
+  <div class="narr"><span class="beat" id="beat">01</span><span class="txt" id="narr"></span></div>
+  <div class="controls">
+    <button class="replay" id="replay">▶ Replay</button>
+    <div class="dots" id="dots"></div>
+  </div>
+  <footer>agentgate-ucp · MIT · <a href="https://github.com/agentkitai/agentgate-ucp">github.com/agentkitai/agentgate-ucp</a></footer>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var reduce = window.matchMedia && matchMedia("(prefers-reduced-motion:reduce)").matches;
+  var el=function(id){return document.getElementById(id);};
+  var scenes={buyer:el("s-buyer"),diagram:el("s-diagram"),approver:el("s-approver")};
+  var pkt=el("pkt"), pktTxt=pkt.querySelector("text"), pktRect=pkt.querySelector("rect");
+  var narr=el("narr"), beatEl=el("beat");
+  var sleep=function(ms){return new Promise(function(r){setTimeout(r,reduce?Math.min(ms,80):ms);});};
+
+  var current=null, zc=1;
+  function showScene(name,dir){
+    return new Promise(function(res){
+      var next=scenes[name];
+      if(current===next){res();return;}
+      var enter = dir==="out"?"scale(1.35)":dir==="in"?"scale(.66)":"scale(1)";
+      var exit  = dir==="out"?"scale(.72)":dir==="in"?"scale(1.7)":"scale(1.06)";
+      next.style.transition="none"; next.style.transform=enter; next.style.opacity="0";
+      next.style.zIndex=String(++zc);
+      void next.offsetWidth;
+      next.style.transition="";
+      var prev=current;
+      if(prev){prev.style.transform=exit;prev.style.opacity="0";}
+      next.style.transform="scale(1)"; next.style.opacity="1";
+      current=next;
+      setTimeout(function(){res();},reduce?90:1400);
+    });
+  }
+
+  function setNarr(n,html){ beatEl.textContent=n; narr.innerHTML=html; }
+  function cls(id,c,on){ var e=el(id); if(e) e.classList[on?"add":"remove"](c); }
+  function edge(id,c){ el(id).setAttribute("class","edge"+(c?(" "+c):"")); }
+
+  // packet along a diagram edge
+  function move(edgeId,dir,label,tone){
+    return new Promise(function(res){
+      var p=el(edgeId), len=p.getTotalLength(), dur=reduce?80:1150;
+      pkt.setAttribute("class",tone==="ok"?"ok":"");
+      pktTxt.textContent=label||""; var w=Math.max(50,(label||"").length*6.6+16);
+      pktRect.setAttribute("width",w); pktRect.setAttribute("x",-w/2);
+      pkt.style.opacity="1"; edge(edgeId,tone==="ok"?"live ok":"live");
+      var t0=null;
+      requestAnimationFrame(function step(ts){
+        if(t0===null)t0=ts;
+        var k=Math.min(1,(ts-t0)/dur);
+        var e=k<.5?2*k*k:1-Math.pow(-2*k+2,2)/2;
+        var at=dir>0?e*len:(1-e)*len;
+        var q=p.getPointAtLength(at);
+        pkt.setAttribute("transform","translate("+q.x+","+q.y+")");
+        if(k<1)requestAnimationFrame(step); else res();
+      });
+    });
+  }
+  function hidePkt(){pkt.style.opacity="0";}
+  var ticks=0; function tick(){ var t=el("d-ticks").children[ticks]; if(t)t.classList.add("show"); ticks++; }
+
+  // reset all mutable state
+  function resetAll(){
+    zc=1; current=null; ticks=0; hidePkt();
+    ["s-buyer","s-diagram","s-approver"].forEach(function(id){var s=el(id);s.style.opacity="0";s.style.transform="scale(1)";s.style.zIndex="1";});
+    el("d-gate").setAttribute("class","gatebox"); edge("d-e1",""); edge("d-e2","");
+    cls("d-hold","show",false); cls("d-placed","show",false);
+    Array.prototype.forEach.call(el("d-ticks").children,function(c){c.classList.remove("show");});
+    el("buy-done").setAttribute("opacity","0"); el("buy-cart").setAttribute("opacity",".95"); cls("buy-zzz","show",false);
+    el("apv-btn").setAttribute("class","apvbtn"); el("apv-txt").style.opacity="1"; el("apv-check").setAttribute("opacity","0"); el("apv-rip").setAttribute("class","ripple");
+  }
+
+  // ---- beats ----
+  var run=0;
+  async function story(){
+    var me=++run; resetAll();
+    await sleep(600); if(me!==run)return;
+
+    // 1 — buyer
+    await showScene("buyer",null); if(me!==run)return;
+    setNarr("01","Late one night, a buyer’s agent places an order on its own — <b>no one is watching the screen.</b>");
+    await sleep(1300); cls("buy-zzz","show",true); await sleep(reduce?300:2600); if(me!==run)return;
+
+    // 2 — into the diagram: request → gate → vendor price → PARK
+    setNarr("02","The request reaches the <b>gate</b> — a checkpoint standing in front of the store.");
+    await showScene("diagram","in"); if(me!==run)return;
+    await sleep(950); if(me!==run)return;
+    await move("d-e1",1,"complete_checkout","req"); if(me!==run)return;
+    el("d-gate").setAttribute("class","gatebox active"); tick(); await sleep(1050); if(me!==run)return;
+    await move("d-e2",1,"get price","req"); if(me!==run)return; await sleep(650);
+    await move("d-e2",-1,"$210.00","req"); if(me!==run)return; tick();
+    setNarr("02","It checks the <b>real price</b> against policy: $210, over the $150 limit.");
+    await sleep(2000); if(me!==run)return;
+    hidePkt(); el("d-gate").setAttribute("class","gatebox hold"); cls("d-hold","show",true); tick();
+    setNarr("03","Too much to spend unwatched — so it <b>parks</b> the purchase. Nothing is bought yet.");
+    await sleep(reduce?400:2800); if(me!==run)return;
+
+    // 3 — out to the approver
+    setNarr("04","A human gets an alert on their screen: <b>approve this $210 order?</b>");
+    await showScene("approver","out"); if(me!==run)return;
+    await sleep(2000); if(me!==run)return;
+    el("apv-rip").setAttribute("class","ripple go");
+    await sleep(850); if(me!==run)return;
+    el("apv-btn").setAttribute("class","apvbtn done"); el("apv-txt").style.opacity="0"; el("apv-check").setAttribute("opacity","1");
+    setNarr("04","They <b>approve</b> — out of band. The agent never had to wait on-screen.");
+    await sleep(reduce?400:2600); if(me!==run)return;
+
+    // 4 — back into the diagram: webhook → replay → PLACED
+    setNarr("05","The approval flows back to the gate, which <b>replays the exact purchase</b> — same idempotency key.");
+    await showScene("diagram","in"); if(me!==run)return;
+    el("d-gate").setAttribute("class","gatebox active"); cls("d-hold","show",false);
+    await sleep(900); if(me!==run)return;
+    await move("d-e2",1,"complete · replay","req"); if(me!==run)return; tick(); await sleep(550);
+    cls("d-placed","show",true); el("d-gate").setAttribute("class","gatebox ok"); edge("d-e2","live ok");
+    setNarr("05","<b>Order placed</b> — hours later, with a human’s ok, and still no one at the screen.");
+    await sleep(reduce?400:2600); if(me!==run)return;
+
+    // 5 — out to the buyer, confirmed
+    setNarr("06","By morning it’s done — and <b>every step is a signed, verifiable record.</b>");
+    el("buy-cart").setAttribute("opacity","0"); el("buy-done").setAttribute("opacity","1"); cls("buy-zzz","show",false);
+    await showScene("buyer","out"); if(me!==run)return;
+  }
+
+  // dots
+  var dotsWrap=el("dots"), dots=[];
+  for(var i=0;i<6;i++){var d=document.createElement("span");d.className="dot";dotsWrap.appendChild(d);dots.push(d);}
+  var beatWatch;
+  function setDots(){/* driven by beat number */}
+  function syncDots(){ var n=parseInt(beatEl.textContent,10)||1; dots.forEach(function(d,i){ d.className="dot"+(i<n-1?" done":i===n-1?" on":""); }); }
+  beatWatch=setInterval(syncDots,180);
+
+  el("replay").addEventListener("click",story);
+  story();
+})();
+</script>
+
+</body>
+</html>
