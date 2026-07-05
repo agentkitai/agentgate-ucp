@@ -95,6 +95,48 @@ Relevant env:
 | -------------------- | ------------------------ | ---------------------------------------------- |
 | `AGENTLENS_URL`      | `http://localhost:3000`  | AgentLens base URL. Unset → evidence disabled. |
 | `AGENTLENS_API_KEY`  | (empty)                  | Bearer key; omit when AgentLens is AUTH_DISABLED. |
+| `AGENTLENS_AGENT_TOKEN` | (empty)               | AgentGate agent JWT — enables **Tier-B** (see below). |
+
+### Tier-B — signed, verified-agent evidence packs (optional)
+
+Tier-A proves the per-checkout chain is intact. **Tier-B** upgrades that to a
+**SIGNED, portable evidence pack** keyed on the *server-verified* agent id, so it
+verifies **offline** (away from the AgentLens DB) and is attributable to a real
+agent — not a self-reported one.
+
+Two things must be true:
+
+1. **The gate presents an AgentGate agent token on ingest.** Set
+   `AGENTLENS_AGENT_TOKEN` to an AgentGate-minted agent JWT (`typ:"agent"`, `sub`
+   = the agent id). The gate sends it as `X-Agent-Token` on every `POST
+   /api/events`; AgentLens verifies it and stamps `verified_agent_id = sub` into
+   each (hashed) event. Without it, events stay unverified and the Tier-B export
+   is empty.
+2. **The AgentLens server can sign + verify agent tokens.** The server needs:
+
+   | AgentLens server env          | Purpose                                                              |
+   | ----------------------------- | -------------------------------------------------------------------- |
+   | `AGENTLENS_AUDIT_SIGNING_KEY` | HMAC-SHA256 key — makes `/api/audit/evidence/export` return a **signed** pack and `/verify` return `valid:true` (unset → unsigned pack; `/verify` → HTTP 501). |
+   | `AGENTGATE_JWT_SECRET`        | AgentGate's real `JWT_SECRET` — verifies **HS256** agent tokens (shared secret). |
+   | `AGENTGATE_JWKS_URL` (or `AGENTGATE_URL`) | Alternative to the shared secret — verifies **RS256** agent tokens against AgentGate's published JWKS (#40), no secret held by AgentLens. |
+   | `AGENTGATE_TOKEN_AUDIENCE` / `AGENTGATE_TOKEN_ISSUER` | Optional — when set, enforced on both verify paths (must match what AgentGate mints). |
+
+When enabled, after the four scenarios `buy.ts` runs a **Tier-B beat**: it decodes
+the token's `sub`, `POST`s `/api/audit/evidence/export {agentId: sub, from, to,
+types:['custom']}`, then `POST`s `/api/audit/evidence/verify` and asserts a signed
+pack that verifies offline:
+
+```
+🔏 Export a SIGNED evidence pack for the verified buying agent, verify it offline…
+   ✅ Tier-B: SIGNED pack for verified agent agt_… — N events, hmac/sha256:… verifies OFFLINE (valid:true)
+```
+
+The beat is **best-effort**: unset `AGENTLENS_AGENT_TOKEN`, an unsigned pack (no
+signing key), or an unreachable server all **skip cleanly** with a note — Tier-A
+still runs. Note the live **:3000** instance (which carries Claude Code telemetry)
+has **no** signing key, so Tier-B skips there; point `AGENTLENS_URL` at a
+signing-configured AgentLens (with `AGENTGATE_JWT_SECRET` matching the token) to
+prove it.
 
 ## The merchant fork (a COMMITTED demo fixture)
 

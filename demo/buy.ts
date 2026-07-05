@@ -53,6 +53,10 @@ const AGENTGATE_API_KEY = process.env.AGENTGATE_API_KEY ?? '';
 // AgentLens is optional — the evidence beat is skipped gracefully when unset/unreachable.
 const AGENTLENS_URL = (process.env.AGENTLENS_URL ?? '').replace(/\/+$/, '');
 const AGENTLENS_API_KEY = process.env.AGENTLENS_API_KEY ?? '';
+// Tier-B (signed, verified-agent evidence) is OPT-IN: the same AgentGate agent
+// token the GATE presents on ingest (AGENTLENS_AGENT_TOKEN) so AgentLens stamps a
+// verified_agent_id. Unset → the Tier-B beat is skipped cleanly (Tier-A still runs).
+const AGENTLENS_AGENT_TOKEN = process.env.AGENTLENS_AGENT_TOKEN ?? '';
 // FormBridge is optional — Scenario D is skipped (with a clear note) when unset.
 const FORMBRIDGE_URL = (process.env.FORMBRIDGE_URL ?? '').replace(/\/+$/, '');
 
@@ -215,6 +219,86 @@ async function verifyEvidence(checkoutId: string): Promise<void> {
     log(`   ✅ evidence chain verified — ${events} events, ${fh}…${lh}`);
   } else {
     log(`   ⚠ evidence not verified (verified=${body.verified}, events=${events})`);
+  }
+}
+
+/** Decode a JWT's `sub` WITHOUT verifying it — just to learn which verified agent
+ *  id to export by (the gate signs the ingest token; AgentLens verifies it).
+ *  Returns undefined for a malformed/absent token. */
+function decodeJwtSub(token: string): string | undefined {
+  try {
+    const payload = token.split('.')[1];
+    if (!payload) return undefined;
+    const json = Buffer.from(payload.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+    const sub = (JSON.parse(json) as { sub?: unknown }).sub;
+    return typeof sub === 'string' && sub.length > 0 ? sub : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Tier-B evidence beat (OPT-IN, best-effort): export a SIGNED, portable evidence
+ * pack for the verified buying agent and verify its signature OFFLINE via
+ * `/api/audit/evidence/verify`. This is the Tier-B upgrade over Tier-A's chain
+ * check: the pack is keyed on the server-derived `verified_agent_id` (so it is
+ * attributable) and HMAC-signed (so it verifies away from the DB).
+ *
+ * Requires (a) the gate to have sent AGENTLENS_AGENT_TOKEN on ingest so events
+ * carry a verified_agent_id, and (b) the AgentLens server to have
+ * AGENTLENS_AUDIT_SIGNING_KEY (signing) + AGENTGATE_JWT_SECRET/JWKS (token verify)
+ * set. When any piece is absent it SKIPS cleanly with a note and never fails the
+ * demo — the live :3000 CC-telemetry instance has no signing key, so it skips there.
+ */
+async function verifyTierBEvidence(fromIso: string): Promise<void> {
+  if (!AGENTLENS_URL || !AGENTLENS_AGENT_TOKEN) {
+    log('   (Tier-B skipped — set AGENTLENS_AGENT_TOKEN + an AgentLens with AGENTLENS_AUDIT_SIGNING_KEY to enable signed packs)');
+    return;
+  }
+  const agentId = decodeJwtSub(AGENTLENS_AGENT_TOKEN);
+  if (!agentId) {
+    log('   (Tier-B skipped — AGENTLENS_AGENT_TOKEN is not a decodable JWT)');
+    return;
+  }
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (AGENTLENS_API_KEY) headers['Authorization'] = `Bearer ${AGENTLENS_API_KEY}`;
+  const to = new Date(Date.now() + 60_000).toISOString();
+  try {
+    const exportRes = await fetch(`${AGENTLENS_URL}/api/audit/evidence/export`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ agentId, from: fromIso, to, types: ['custom'] }),
+    });
+    if (!exportRes.ok) {
+      log(`   (Tier-B skipped — evidence export returned HTTP ${exportRes.status})`);
+      return;
+    }
+    const pack = (await exportRes.json()) as {
+      totalEvents?: number;
+      signature?: { type?: string; alg?: string; value?: string } | null;
+    };
+    if (!pack.signature) {
+      log('   (Tier-B skipped — AgentLens returned an UNSIGNED pack; set AGENTLENS_AUDIT_SIGNING_KEY on the server)');
+      return;
+    }
+    if (!pack.totalEvents) {
+      log(`   ⚠ Tier-B: signed pack but 0 verified-agent events — did the gate send AGENTLENS_AGENT_TOKEN (sub=${agentId})?`);
+      return;
+    }
+    const verifyRes = await fetch(`${AGENTLENS_URL}/api/audit/evidence/verify`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(pack),
+    });
+    const verifyBody = (await verifyRes.json()) as { valid?: boolean };
+    if (verifyRes.ok && verifyBody.valid) {
+      const sigPreview = `${pack.signature.type}/${pack.signature.alg}:${(pack.signature.value ?? '').slice(0, 12)}…`;
+      log(`   ✅ Tier-B: SIGNED pack for verified agent ${agentId} — ${pack.totalEvents} events, ${sigPreview} verifies OFFLINE (valid:true)`);
+    } else {
+      log(`   ⚠ Tier-B: pack did NOT verify (HTTP ${verifyRes.status}, valid=${verifyBody.valid})`);
+    }
+  } catch (err) {
+    log(`   (Tier-B skipped — AgentLens unreachable: ${err instanceof Error ? err.message : String(err)})`);
   }
 }
 
@@ -388,7 +472,9 @@ async function scenarioC(client: Client): Promise<void> {
   if (msg?.severity !== 'requires_buyer_review') {
     fail(`expected a requires_buyer_review hold, got severity '${msg?.severity}'`);
   }
-  if (msg?.severity === 'requires_buyer_input' || msg?.path) {
+  // severity is already asserted requires_buyer_review above; a plain hold also
+  // carries no field `path` (that would make it a buyer-input escalation).
+  if (msg?.path) {
     fail('a plain merchant hold must NOT be a buyer-input escalation (no field path)');
   }
 
@@ -474,6 +560,9 @@ async function main(): Promise<void> {
   console.log(`# agentlens  : ${AGENTLENS_URL || '(unset — evidence skipped)'}`);
   console.log('################################################################');
 
+  // Tier-B export window opens just before the first scenario emits any events.
+  const runStartedAt = new Date(Date.now() - 1000).toISOString();
+
   const client = await connect();
   try {
     const tools = await client.listTools();
@@ -485,6 +574,12 @@ async function main(): Promise<void> {
   } finally {
     await client.close();
   }
+
+  console.log('\n================================================================');
+  console.log('TIER-B — signed, portable, verified-agent evidence pack (optional)');
+  console.log('================================================================');
+  log('🔏 Export a SIGNED evidence pack for the verified buying agent, verify it offline…');
+  await verifyTierBEvidence(runStartedAt);
 
   console.log('\n################################################################');
   console.log('# ✅ DEMO PASSED — all enabled scenarios asserted green.');

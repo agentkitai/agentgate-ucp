@@ -50,6 +50,11 @@ GATE_PORT=8787
 # AgentLens (tamper-evident evidence). Optional: unset to run the demo without it.
 AGENTLENS_URL="${AGENTLENS_URL:-http://localhost:3000}"
 AGENTLENS_API_KEY="${AGENTLENS_API_KEY:-}"
+# Tier-B (signed, verified-agent evidence). Optional AgentGate agent token the gate
+# presents on ingest so AgentLens stamps a verified_agent_id. Unset → Tier-A only.
+# Needs an AgentLens with AGENTLENS_AUDIT_SIGNING_KEY + AGENTGATE_JWT_SECRET set
+# (the live :3000 CC-telemetry instance has no signing key → Tier-B skips there).
+AGENTLENS_AGENT_TOKEN="${AGENTLENS_AGENT_TOKEN:-}"
 # Shared HMAC secret: FormBridge signs the answer-back webhook, the gate verifies it.
 FORMBRIDGE_WEBHOOK_SECRET="${FORMBRIDGE_WEBHOOK_SECRET:-$(node -e 'console.log(require("crypto").randomBytes(24).toString("hex"))')}"
 # lvh.me → 127.0.0.1 (public DNS): the gate's registered webhook URL that clears
@@ -212,6 +217,7 @@ echo "── starting the gate on :$GATE_PORT ──"
   SQLITE_PATH="$GATE_DB" \
   AGENTLENS_URL="$AGENTLENS_URL" \
   AGENTLENS_API_KEY="$AGENTLENS_API_KEY" \
+  AGENTLENS_AGENT_TOKEN="$AGENTLENS_AGENT_TOKEN" \
   FORMBRIDGE_URL="http://localhost:$FORMBRIDGE_PORT" \
   FORMBRIDGE_PUBLIC_URL="http://localhost:$FORMBRIDGE_PORT" \
   FORMBRIDGE_WEBHOOK_SECRET="$FORMBRIDGE_WEBHOOK_SECRET" \
@@ -226,6 +232,7 @@ echo "── running demo/buy.ts (transcript → $TRANSCRIPT) ──"
   AGENTGATE_API_KEY="$ADMIN_KEY" \
   AGENTLENS_URL="$AGENTLENS_URL" \
   AGENTLENS_API_KEY="$AGENTLENS_API_KEY" \
+  AGENTLENS_AGENT_TOKEN="$AGENTLENS_AGENT_TOKEN" \
   FORMBRIDGE_URL="http://localhost:$FORMBRIDGE_PORT" \
   npx tsx demo/buy.ts ) 2>&1 | tee "$TRANSCRIPT"
 STATUS=${PIPESTATUS[0]}
