@@ -3,13 +3,23 @@
   "version": "0.1.0",
   "description": "The approval gate for unattended UCP buying agents — a policy/approval MCP proxy in front of a merchant's UCP checkout endpoint.",
   "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/agentkitai/agentgate-ucp.git" },
+  "homepage": "https://agentkitai.github.io/agentgate-ucp/",
+  "bugs": "https://github.com/agentkitai/agentgate-ucp/issues",
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
     "agentgate-ucp": "./dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/copy-schemas.mjs",
+    "prepublishOnly": "npm run build",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
