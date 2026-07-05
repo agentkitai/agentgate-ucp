@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 
 import { describe, expect, it } from 'vitest';
 
+import { MerchantError } from '../src/merchant/client.js';
 import type { MerchantClient } from '../src/merchant/client.js';
 import type { ParkedSession, ParkedSessionStore } from '../src/store/parked.js';
 import { openParkedStore } from '../src/store/parked.js';
@@ -233,19 +234,89 @@ describe('handleDecisionWebhook — merchant error on replay', () => {
   });
 });
 
-describe('handleDecisionWebhook — dev mode (no secret)', () => {
-  it('processes without a signature when webhookSecret is unset', async () => {
+describe('handleDecisionWebhook — no secret is FAIL-CLOSED (finding C1)', () => {
+  it('REJECTS (never processes) when webhookSecret is unset — no dev-mode bypass', async () => {
     const store = seedPending();
     const { merchant, completes } = makeStubMerchant();
     const body = envelope('request.approved', 'req_1');
 
+    // Even a "correctly shaped" delivery is rejected when there is no secret to verify
+    // against: an unsigned decision must NEVER re-drive a parked over-budget order.
     const result = await handleDecisionWebhook(
       { store, merchant, webhookSecret: undefined },
       body,
       undefined
     );
 
-    expect(result.outcome).toBe('approved_replayed');
-    expect(completes).toHaveLength(1);
+    expect(result.outcome).toBe('rejected');
+    expect(completes).toHaveLength(0);
+    expect(store.get('req_1')?.status).toBe('pending'); // untouched
+  });
+});
+
+describe('handleDecisionWebhook — transient replay failure is retryable (findings M1/M2)', () => {
+  it('a merchant error marks the row re-claimable and signals retry', async () => {
+    const store = seedPending();
+    const { merchant } = makeStubMerchant({
+      throwOnComplete: new Error('merchant 503'),
+    });
+    const body = envelope('request.approved', 'req_1');
+
+    const result = await handleDecisionWebhook({ store, merchant, webhookSecret: SECRET }, body, sign(body));
+
+    expect(result.outcome).toBe('error');
+    expect(result.retryable).toBe(true); // route → 5xx so AgentGate redelivers
+    expect(store.get('req_1')?.status).toBe('error');
+    // 'error' is re-claimable, so a retry re-drives the order (never stranded).
+    expect(store.claim('req_1')).toBe(true);
+  });
+
+  it('a PERMANENT merchant 4xx (400) is NOT retryable AND is TERMINAL (never re-executed)', async () => {
+    const store = seedPending();
+    const { merchant } = makeStubMerchant({
+      throwOnComplete: new MerchantError(400, { detail: 'invalid payment data' }, 'complete_checkout'),
+    });
+    const body = envelope('request.approved', 'req_1');
+
+    const result = await handleDecisionWebhook({ store, merchant, webhookSecret: SECRET }, body, sign(body));
+
+    expect(result.outcome).toBe('error');
+    expect(result.retryable).toBe(false); // a definitively-permanent 4xx can never succeed
+    // The row is terminal 'failed' — a redelivery (e.g. lost ack) can NOT re-execute it.
+    expect(store.get('req_1')?.status).toBe('failed');
+    expect(store.claim('req_1')).toBe(false);
+  });
+
+  it('an AMBIGUOUS/transient status (5xx / 408 / 409-in-progress) IS retryable and re-claimable', async () => {
+    for (const status of [503, 408, 409]) {
+      const store = seedPending();
+      const { merchant } = makeStubMerchant({
+        throwOnComplete: new MerchantError(status, { detail: 'transient' }, 'complete_checkout'),
+      });
+      const body = envelope('request.approved', 'req_1');
+
+      const result = await handleDecisionWebhook({ store, merchant, webhookSecret: SECRET }, body, sign(body));
+
+      expect(result.outcome).toBe('error');
+      expect(result.retryable).toBe(true);
+      expect(store.get('req_1')?.status).toBe('error');
+      expect(store.claim('req_1')).toBe(true); // re-claimable → a retry re-drives
+    }
+  });
+
+  it('two concurrent approved deliveries replay the completion exactly ONCE (atomic claim)', async () => {
+    const store = seedPending();
+    const { merchant, completes } = makeStubMerchant();
+    const body = envelope('request.approved', 'req_1');
+    const sig = sign(body);
+
+    const [a, b] = await Promise.all([
+      handleDecisionWebhook({ store, merchant, webhookSecret: SECRET }, body, sig),
+      handleDecisionWebhook({ store, merchant, webhookSecret: SECRET }, body, sig),
+    ]);
+
+    const outcomes = [a.outcome, b.outcome].sort();
+    expect(outcomes).toEqual(['approved_replayed', 'ignored']);
+    expect(completes).toHaveLength(1); // exactly one merchant completion
   });
 });

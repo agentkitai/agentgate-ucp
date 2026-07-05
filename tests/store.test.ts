@@ -84,6 +84,41 @@ describe('openParkedStore (better-sqlite3, :memory:)', () => {
   });
 });
 
+describe('openParkedStore — atomic claim (findings M1/M2)', () => {
+  it('two concurrent claims of ONE row ⇒ exactly one wins (no double replay)', () => {
+    const store = openParkedStore(':memory:');
+    store.put(pendingSession());
+    expect(store.claim('req_1')).toBe(true);
+    expect(store.claim('req_1')).toBe(false); // already processing
+    expect(store.get('req_1')?.status).toBe('processing');
+  });
+
+  it("an 'error' row is re-claimable (a retry re-drives the approved order); terminal rows are NOT", () => {
+    const store = openParkedStore(':memory:');
+    store.put(pendingSession());
+    expect(store.claim('req_1')).toBe(true); // pending → processing
+    store.markStatus('req_1', 'error');
+    expect(store.claim('req_1')).toBe(true); // error → processing (retry re-drives)
+    store.markStatus('req_1', 'approved_replayed');
+    expect(store.claim('req_1')).toBe(false); // terminal
+    store.markStatus('req_1', 'denied');
+    expect(store.claim('req_1')).toBe(false); // terminal
+  });
+
+  it('a STALE processing row (lease expired) is reclaimable — a crash never strands the order', () => {
+    const store = openParkedStore(':memory:');
+    store.put(pendingSession({ status: 'processing', claimedAt: '2020-01-01T00:00:00.000Z' }));
+    expect(store.claim('req_1')).toBe(true); // stale → reclaimed
+    // Fresh lease ⇒ not immediately reclaimable again.
+    expect(store.claim('req_1')).toBe(false);
+  });
+
+  it('claim on an unknown approval id ⇒ false', () => {
+    const store = openParkedStore(':memory:');
+    expect(store.claim('nope')).toBe(false);
+  });
+});
+
 function formSession(overrides: Partial<FormPendingSession> = {}): FormPendingSession {
   const now = new Date().toISOString();
   return {

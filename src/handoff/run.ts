@@ -127,7 +127,8 @@ export async function maybeHandoffBuyerInput(
     //   processing — an answer-back is mid-flight → reuse the in-flight URL, but NEVER
     //                put/rebuild (that would reset the in-progress row back to pending).
     //   resolved/  — terminal: the form's lifecycle is over. Do NOT resurrect it and do
-    //   denied       NOT spawn a new one → treat as no-handoff (raw escalation).
+    //   denied/      NOT spawn a new one → treat as no-handoff (raw escalation).
+    //   failed
     //   error      — a prior handoff failed transiently → allow a fresh handoff.
     // `forceFresh` (answer-back re-drive) skips reuse entirely to mint a NEW round.
     if (!opts.forceFresh) {
@@ -155,6 +156,7 @@ export async function maybeHandoffBuyerInput(
             break;
           case 'resolved':
           case 'denied':
+          case 'failed':
             return checkout; // terminal → raw escalation, no resurrection, no new row
           case 'error':
             break; // allow a fresh handoff below

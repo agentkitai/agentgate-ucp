@@ -49,6 +49,29 @@ export class MerchantError extends Error {
   }
 }
 
+/**
+ * 4xx statuses that can NEVER succeed on retry — a genuinely permanent rejection.
+ * Everything else (5xx, 408, 409, 423, 425, 429, network errors) is treated as
+ * transient. The bias is deliberate and money-safe: wrongly retrying a permanent
+ * failure just burns a few bounded redeliveries, but wrongly abandoning a transient
+ * one drops an APPROVED order — so only definitively-permanent statuses are terminal.
+ */
+const PERMANENT_MERCHANT_STATUSES = new Set([400, 401, 403, 404, 405, 410, 422]);
+
+/**
+ * True when a failed merchant call is worth RETRYING (a redelivered webhook should
+ * re-drive it). Transient = a network/transport failure (not a MerchantError) or any
+ * status NOT in {@link PERMANENT_MERCHANT_STATUSES}. A definitively-permanent 4xx
+ * (bad request, auth, not-found, unprocessable, …) is NOT retryable — retrying it
+ * just loops the delivery, so we ack and mark the row terminally failed instead.
+ */
+export function isRetryableMerchantError(err: unknown): boolean {
+  if (err instanceof MerchantError) {
+    return !PERMANENT_MERCHANT_STATUSES.has(err.status);
+  }
+  return true; // a non-HTTP failure (network/timeout/DNS) is transient
+}
+
 export class MerchantClient {
   constructor(private readonly baseUrl: string) {}
 

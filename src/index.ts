@@ -44,6 +44,7 @@ const handoff: HandoffDeps | undefined =
 const app = createApp({
   merchant,
   gate,
+  mcpAuthToken: config.mcpAuthToken,
   parked: store,
   formPending,
   recorder,

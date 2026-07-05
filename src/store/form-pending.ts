@@ -21,9 +21,17 @@ import Database from 'better-sqlite3';
  *                for spend approval). Terminal.
  *   denied     — the re-driven completion was denied by spend policy (no order).
  *                Terminal.
- * Only `pending`/`error` are re-claimable; `processing`/`resolved`/`denied` are not.
+ *   failed     — a PERMANENT merchant 4xx on the re-drive (canceled/invalid). Terminal:
+ *                never re-executed, even if a redelivery slips through a lost ack.
+ * Only `pending`/`error` are re-claimable; `processing`/`resolved`/`denied`/`failed` are not.
  */
-export type FormPendingStatus = 'pending' | 'processing' | 'resolved' | 'denied' | 'error';
+export type FormPendingStatus =
+  | 'pending'
+  | 'processing'
+  | 'resolved'
+  | 'denied'
+  | 'error'
+  | 'failed';
 
 /**
  * ponytail: a plain time lease instead of a heartbeat/renewal protocol. A hard

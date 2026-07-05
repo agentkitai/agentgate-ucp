@@ -10,6 +10,14 @@
  */
 import type { Checkout, CheckoutMessage } from '../types.js';
 
+/**
+ * Cap on buyer-input messages processed from ONE merchant response. The merchant
+ * controls `messages[]`, and each mapped message triggers schema resolution + a
+ * FormBridge round-trip, so an unbounded array is a DoS/abuse lever. A real
+ * buyer-input escalation asks for a few fields; 50 is far above any legitimate one.
+ */
+const MAX_BUYER_INPUT_MESSAGES = 50;
+
 /** A buyer-input message with a guaranteed field `path`. */
 export interface BuyerInputMessage {
   /** RFC-9535 JSONPath to the checkout field the human must supply. */
@@ -34,9 +42,12 @@ function isBuyerInput(msg: CheckoutMessage): boolean {
 export function detectBuyerInput(checkout: Checkout): BuyerInputMessage[] {
   if (checkout.status !== 'requires_escalation') return [];
   const messages = checkout.messages ?? [];
-  return messages.filter(isBuyerInput).map((m) => ({
-    path: m.path as string,
-    code: m.code,
-    content: m.content,
-  }));
+  return messages
+    .filter(isBuyerInput)
+    .slice(0, MAX_BUYER_INPUT_MESSAGES) // bound a hostile merchant's message fan-out
+    .map((m) => ({
+      path: m.path as string,
+      code: m.code,
+      content: m.content,
+    }));
 }

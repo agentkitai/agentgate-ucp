@@ -198,6 +198,19 @@ describe('maybeHandoffBuyerInput — status-aware reuse (finding C)', () => {
     expect(d.formPending.get('sub_1')?.status).toBe('resolved'); // still terminal
   });
 
+  it('a TERMINAL (failed) row is NOT resurrected — a permanent-4xx form stays dead', async () => {
+    const { fbClient, submissions } = makeStubFbClient();
+    const d = deps(fbClient);
+
+    await maybeHandoffBuyerInput(BUYER_INPUT_CHECKOUT, CTX, d); // pending sub_1
+    d.formPending.markStatus('sub_1', 'failed'); // permanent merchant 4xx on answer-back
+
+    const result = await maybeHandoffBuyerInput(BUYER_INPUT_CHECKOUT, CTX, d);
+    expect(result).toBe(BUYER_INPUT_CHECKOUT); // raw escalation, no form
+    expect(submissions).toHaveLength(1); // NOT resurrected into a new submission
+    expect(d.formPending.get('sub_1')?.status).toBe('failed');
+  });
+
   it('complete-after-get UPGRADES a payload-less pending row with the completion payload + key', async () => {
     const { fbClient, submissions } = makeStubFbClient();
     const d = deps(fbClient);
@@ -508,7 +521,7 @@ describe('gateCompleteCheckout — buyer-input handoff wiring', () => {
       },
     };
 
-    await gateCompleteCheckout(
+    const res = await gateCompleteCheckout(
       merchant,
       spyGate,
       { meta: AGENT_META, id: 'co_42', checkout: PAYMENT },
@@ -518,11 +531,15 @@ describe('gateCompleteCheckout — buyer-input handoff wiring', () => {
       undefined // FORMBRIDGE unset ⇒ no handoff
     );
 
-    // The (a′) short-circuit did NOT fire: the spend gate ran and the completion
-    // was attempted (the merchant surfaces the escalation naturally).
-    expect(gCalls).toHaveLength(1);
-    expect(mCalls).toContain('completeCheckout');
-    expect(events).toContain('ucp.complete_checkout.received');
-    expect(events).toContain('ucp.gate.decision');
+    // (a′) An escalation AT GET carries no grand total, so there is nothing to
+    // spend-gate: the raw escalation is surfaced faithfully and the gate is NOT run
+    // on a phantom $0 (finding C2 — the old 0-default is gone). No completion is
+    // attempted either (the GET already says the merchant needs more input).
+    const sc = res.structuredContent as Checkout;
+    expect(sc.status).toBe('requires_escalation');
+    expect(sc.messages?.[0]?.code).toBe('buyer_input_required');
+    expect(sc.continue_url).toBeUndefined(); // no handoff configured ⇒ raw escalation
+    expect(gCalls).toHaveLength(0); // gate NOT evaluated on an un-completable escalation
+    expect(mCalls).not.toContain('completeCheckout');
   });
 });

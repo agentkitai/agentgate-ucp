@@ -28,9 +28,20 @@ import { MerchantClient, MerchantError } from '../merchant/client.js';
 import type { EvidenceRecorder } from '../observability/agentlens.js';
 import { recordGateEvent } from '../observability/agentlens.js';
 import type { ParkedSessionStore } from '../store/parked.js';
-import type { Checkout } from '../types.js';
+import type { Checkout, CheckoutFacts } from '../types.js';
 import type { Gate } from './agentgate.js';
 import { flattenCheckout } from './flatten.js';
+
+/** True when two flattened fact sets are identical across EVERY gated dimension. */
+function sameFacts(a: CheckoutFacts, b: CheckoutFacts): boolean {
+  return (
+    a.totals_total_minor === b.totals_total_minor &&
+    a.currency === b.currency &&
+    a.line_count === b.line_count &&
+    a.line_item_ids.length === b.line_item_ids.length &&
+    a.line_item_ids.every((id, i) => id === b.line_item_ids[i])
+  );
+}
 
 /** Extra correlation the server can supply (e.g. the MCP session id). */
 export interface CompleteGateContext {
@@ -144,9 +155,8 @@ export async function gateCompleteCheckout(
   });
 
   try {
-    // (a) Authoritative totals from the merchant, not the agent-supplied object.
+    // (a) Authoritative checkout from the merchant, not the agent-supplied object.
     const authoritative = await merchant.getCheckout(id, headers);
-    const facts = flattenCheckout(authoritative);
 
     // (b) Pin an idempotency-key (generate one if the agent omitted it).
     idempotencyKey =
@@ -164,18 +174,26 @@ export async function gateCompleteCheckout(
       idempotencyKey,
     });
 
-    // (a′) If the authoritative checkout is ALREADY a buyer-input escalation AND
-    // form handoff is configured, hand off immediately — there is nothing to gate
-    // until the human supplies the field. Guarded on `handoff` so that with
-    // FORMBRIDGE_URL unset the flow is genuinely unchanged from pre-gate-3: the
-    // gate evidence is emitted, the spend gate runs, and merchant.completeCheckout
-    // surfaces the escalation naturally (no short-circuit).
-    if (handoff && detectBuyerInput(authoritative).length > 0) {
-      const escalation = await maybeHandoffBuyerInput(authoritative, handoffCtx(), handoff, {
-        forceFresh: ctx.forceFreshHandoff,
-      });
-      return wrapCheckout(escalation);
+    // (a′) If the authoritative checkout is ALREADY an escalation there is no
+    // completable order to spend-gate — a `requires_escalation` checkout carries no
+    // grand total. Surface it FAITHFULLY (hand a buyer-input off to a typed form when
+    // configured, else return the raw escalation) instead of gating a phantom $0
+    // total. Defaulting a missing total to 0 was the pre-fix fail-open; now flatten
+    // (below) only ever runs on a genuinely completable checkout, which MUST carry a
+    // real total — a completable checkout with no total is refused, not read as $0.
+    if (authoritative.status === 'requires_escalation') {
+      const surfaced = handoff
+        ? await maybeHandoffBuyerInput(authoritative, handoffCtx(), handoff, {
+            forceFresh: ctx.forceFreshHandoff,
+          })
+        : authoritative;
+      return wrapCheckout(surfaced);
     }
+
+    // (a) Flatten the AUTHORITATIVE (completable) totals into policy facts. Runs only
+    // AFTER the escalation short-circuit above, so it always sees a completable
+    // checkout — a missing/invalid grand total here is refused (fail closed), not $0.
+    const facts = flattenCheckout(authoritative);
 
     // Evidence (1): the completion request AgentGate is about to gate.
     recordGateEvent(recorder, {
@@ -219,6 +237,37 @@ export async function gateCompleteCheckout(
     // (d) Branch on the decision.
     switch (decision.status) {
       case 'approved': {
+        // (d′) RE-BIND every gated fact to the charge. `update_checkout` is an ungated
+        // passthrough, so a concurrent connection could have mutated the cart during the
+        // gate's (network) evaluation window — the gate would then have approved one
+        // snapshot while the merchant charges a different one. Re-fetch the authoritative
+        // checkout immediately before charging and FAIL CLOSED on any drift.
+        const rechecked = await merchant.getCheckout(id, headers);
+        // If it slipped into an escalation during the window there is nothing to
+        // complete (and no total to flatten) — surface it faithfully rather than
+        // throwing an opaque error on its now-absent total.
+        if (rechecked.status === 'requires_escalation') {
+          const surfaced = handoff
+            ? await maybeHandoffBuyerInput(rechecked, handoffCtx(), handoff, {
+                forceFresh: ctx.forceFreshHandoff,
+              })
+            : rechecked;
+          return wrapCheckout(surfaced);
+        }
+        // Compare ALL gated facts (total, currency, line_count, line_item_ids) — a
+        // concurrent update could swap currency or line items while preserving the
+        // total, charging a cart policy never evaluated. Any drift → refuse; the agent
+        // re-drives against the new state (which is re-gated).
+        // ponytail: this closes the eval-window race for every gated fact. The residual
+        // sub-ms window between THIS get and completeCheckout can only be closed
+        // merchant-side (pass the gated facts as an enforced constraint, or lock the
+        // session) — out of scope for a client-side gate.
+        const recheck = flattenCheckout(rechecked);
+        if (!sameFacts(recheck, facts)) {
+          return errorResult(
+            `checkout ${id} changed after the gate approved it; refusing to complete`
+          );
+        }
         const completed = await merchant.completeCheckout(id, paymentPayload, {
           ...headers,
           idempotencyKey,
@@ -257,14 +306,27 @@ export async function gateCompleteCheckout(
           });
           return wrapCheckout(completed);
         }
-        // Evidence (3a): the order is placed.
-        recordGateEvent(recorder, {
-          sessionId,
-          agentId,
-          type: 'ucp.order.placed',
-          data: { orderId: extractOrderId(completed), idempotencyKey },
-          metadata: metadataFor(),
-        });
+        // Evidence (3a): the order is placed — but ONLY label it placed on an EXPLICIT
+        // terminal-success status. The merchant controls `status`, so a 200 body with
+        // `failed`/`canceled`/an unknown status must NOT be stamped as a placed order
+        // (that would forge a completed purchase into the tamper-evident timeline).
+        if (completed.status === 'completed') {
+          recordGateEvent(recorder, {
+            sessionId,
+            agentId,
+            type: 'ucp.order.placed',
+            data: { orderId: extractOrderId(completed), idempotencyKey },
+            metadata: metadataFor(),
+          });
+        } else {
+          recordGateEvent(recorder, {
+            sessionId,
+            agentId,
+            type: 'ucp.order.unexpected_status',
+            data: { status: completed.status, orderId: extractOrderId(completed), idempotencyKey },
+            metadata: metadataFor(),
+          });
+        }
         return wrapCheckout(completed);
       }
       case 'denied':

@@ -8,6 +8,26 @@ import {
   writeAtPath,
 } from '../src/schema/jsonpath.js';
 
+describe('JSONPath length cap — DoS guard (finding H3)', () => {
+  // jsonpath-plus's tokenizer is O(n^2); a merchant-controlled 400 KB path would
+  // freeze the single-threaded gate. An over-long path is rejected BEFORE any parse.
+  const huge = '$' + '.x'.repeat(200_000); // ~400 KB
+
+  it('toSegments throws on an over-long path (no quadratic parse)', () => {
+    const started = Date.now();
+    expect(() => toSegments(huge)).toThrow(UnsupportedPathError);
+    expect(Date.now() - started).toBeLessThan(50); // rejected instantly, not after seconds
+  });
+
+  it('writeAtPath rejects an over-long path', () => {
+    expect(() => writeAtPath({}, huge, 'v')).toThrow(UnsupportedPathError);
+  });
+
+  it('readAtPath returns undefined for an over-long path (no parse)', () => {
+    expect(readAtPath({ a: 1 }, huge)).toBeUndefined();
+  });
+});
+
 describe('readAtPath', () => {
   const obj = {
     buyer: { phone_number: '+15551234567' },
