@@ -2,6 +2,8 @@
 
 **The approval gate for unattended UCP buying agents.**
 
+[![npm](https://img.shields.io/npm/v/@agentkitai/agentgate-ucp?logo=npm&color=cb3837)](https://www.npmjs.com/package/@agentkitai/agentgate-ucp) &nbsp; [![license: MIT](https://img.shields.io/badge/license-MIT-2f6f66.svg)](LICENSE)
+
 ![A gated purchase, animated — an unattended agent places an order, the gate parks it over budget, a human approves at their computer, and it completes with a verifiable evidence trail.](docs/agentgate-ucp-demo.gif)
 
 **▶ [Play the interactive walkthrough](https://agentkitai.github.io/agentgate-ucp/flow.html)** &nbsp;·&nbsp; [read the launch post](https://agentkitai.github.io/agentgate-ucp/)
@@ -19,6 +21,17 @@ endpoint. It re-exposes the UCP checkout tools 1:1 and passes everything through
 The agent still speaks plain UCP. It never learns there's a gate in front of the
 merchant; it just sometimes gets an escalation back (with a link a human
 resolves) instead of a completed order.
+
+## Run
+
+```bash
+npx @agentkitai/agentgate-ucp        # run the gate (or: npm i -g @agentkitai/agentgate-ucp)
+```
+
+Configure via environment (see [`.env.example`](.env.example)) — at minimum
+`MERCHANT_URL`, `AGENTGATE_URL`, `AGENTGATE_API_KEY`; FormBridge and AgentLens are
+optional (unset each and that seam passes through). Then point your agent's MCP
+client at `$PUBLIC_URL/mcp` (default `http://localhost:8787/mcp`).
 
 ## What it does — three gate points
 
