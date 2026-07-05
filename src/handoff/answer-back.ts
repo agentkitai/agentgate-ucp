@@ -32,7 +32,7 @@ import type { Gate } from '../gate/agentgate.js';
 import { gateCompleteCheckout } from '../gate/complete.js';
 import { detectBuyerInput } from './detect.js';
 import type { HandoffDeps } from './run.js';
-import { MerchantClient, MerchantError } from '../merchant/client.js';
+import { isRetryableMerchantError, MerchantClient, MerchantError } from '../merchant/client.js';
 import type { EvidenceRecorder } from '../observability/agentlens.js';
 import { recordGateEvent } from '../observability/agentlens.js';
 import { writeAtPath } from '../schema/jsonpath.js';
@@ -335,8 +335,12 @@ export async function handleAnswerBackWebhook(
 
     return { outcome: finalStatus === 'denied' ? 'denied' : 'resolved', redriven: true };
   } catch (err) {
-    // Transient merchant failure (GET/update threw) → re-claimable + retry.
-    store.markStatus(row.submissionId, 'error');
+    // Merchant failure (GET/update threw). Retry ONLY on a transient failure (network /
+    // 5xx / 429 / 408) → row stays re-claimable (`error`). A permanent 4xx
+    // (canceled/invalid) can never succeed → mark TERMINAL (`failed`) so a redelivery
+    // can't re-execute it, and ack so FormBridge stops redelivering.
+    const retryable = isRetryableMerchantError(err);
+    store.markStatus(row.submissionId, retryable ? 'error' : 'failed');
     const reason =
       err instanceof MerchantError
         ? err.message
@@ -344,7 +348,7 @@ export async function handleAnswerBackWebhook(
           ? err.message
           : String(err);
     console.error(`[agentgate-ucp] answer-back failed for submission ${row.submissionId}: ${reason}`);
-    return { outcome: 'error', retryable: true, reason };
+    return { outcome: 'error', retryable, reason };
   }
 }
 

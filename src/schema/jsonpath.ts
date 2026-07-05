@@ -35,6 +35,24 @@ export class UnsupportedPathError extends Error {
  */
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
+/**
+ * Hard cap on a JSONPath string length before it is parsed. The `path` on a
+ * buyer-input message is MERCHANT-controlled, and `jsonpath-plus`'s tokenizer is
+ * O(n²) in the path length — a ~400 KB `$.x.x.x…` path blocks the single-threaded
+ * event loop for tens of seconds (a merchant-triggered DoS of the whole gate). A
+ * real field path is a handful of segments; 2 KB is far above any legitimate one.
+ */
+const MAX_PATH_LEN = 2048;
+
+/** Reject an over-long path BEFORE any (quadratic) parse. */
+function assertPathLengthOk(path: string): void {
+  if (path.length > MAX_PATH_LEN) {
+    throw new UnsupportedPathError(
+      `JSONPath exceeds ${MAX_PATH_LEN} chars (got ${path.length}) — refusing to parse (DoS guard)`
+    );
+  }
+}
+
 /** True if `key` is a prototype-pollution vector we must never traverse/create. */
 function isForbiddenKey(key: string): boolean {
   return FORBIDDEN_KEYS.has(key);
@@ -196,6 +214,7 @@ function bracketQuotingFlags(path: string): boolean[] | undefined {
  * each segment was bracket-quoted (a distinction `toPathArray` discards).
  */
 export function toSegments(path: string): PathSegment[] {
+  assertPathLengthOk(path); // DoS guard: reject before the O(n²) tokenizer
   let parts: unknown;
   try {
     parts = JSONPath.toPathArray(path);
@@ -240,6 +259,7 @@ function segKey(seg: PathSegment): string {
  */
 export function readAtPath(obj: unknown, path: string): unknown {
   if (obj === null || typeof obj !== 'object') return undefined;
+  if (path.length > MAX_PATH_LEN) return undefined; // DoS guard before the O(n²) parse
   try {
     return JSONPath({ path, json: obj as never, wrap: false });
   } catch {

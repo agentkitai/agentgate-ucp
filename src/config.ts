@@ -4,11 +4,21 @@
 export interface Config {
   port: number;
   publicUrl: string;
+  /**
+   * Bearer token every buying agent must present on `/mcp` (Authorization: Bearer
+   * <token>). REQUIRED — `/mcp` drives real purchases, so an unauthenticated
+   * endpoint is a policy bypass. The gate refuses to start without it.
+   */
+  mcpAuthToken: string;
   merchantUrl: string;
   agentgateUrl: string;
   agentgateApiKey: string;
-  /** HMAC secret from AgentGate `createWebhook`, used to verify decision webhooks. */
-  agentgateWebhookSecret: string | undefined;
+  /**
+   * HMAC secret from AgentGate `createWebhook`, used to verify decision webhooks.
+   * REQUIRED: the decision webhook re-drives a parked (over-policy) completion, so
+   * an unsigned delivery must never be accepted — the gate fails to start without it.
+   */
+  agentgateWebhookSecret: string;
   sqlitePath: string;
   /** AgentLens base URL for tamper-evident evidence (AGENTLENS_URL). Unset → no evidence. */
   agentlensUrl: string | undefined;
@@ -39,10 +49,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const config: Config = {
     port: Number(env['PORT'] ?? 8787),
     publicUrl: env['PUBLIC_URL'] ?? 'http://localhost:8787',
+    // Fail CLOSED: /mcp moves money, so it MUST be authenticated. No default.
+    mcpAuthToken: must('MCP_AUTH_TOKEN'),
     merchantUrl: must('MERCHANT_URL'),
     agentgateUrl: must('AGENTGATE_URL'),
     agentgateApiKey: must('AGENTGATE_API_KEY'),
-    agentgateWebhookSecret: env['AGENTGATE_WEBHOOK_SECRET'] || undefined,
+    // Fail CLOSED: the decision webhook re-drives a real payment (see the throw below).
+    agentgateWebhookSecret: must('AGENTGATE_WEBHOOK_SECRET'),
     sqlitePath: env['SQLITE_PATH'] ?? './agentgate-ucp.db',
     // AgentLens evidence is entirely optional — the adapter runs fine without it.
     agentlensUrl: env['AGENTLENS_URL'] || undefined,

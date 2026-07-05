@@ -6,7 +6,25 @@
  */
 import Database from 'better-sqlite3';
 
-export type ParkedStatus = 'pending' | 'approved_replayed' | 'denied' | 'error';
+export type ParkedStatus =
+  | 'pending'
+  | 'processing'
+  | 'approved_replayed'
+  | 'denied'
+  /** Transient replay failure — RE-CLAIMABLE so a redelivery re-drives the order. */
+  | 'error'
+  /** PERMANENT replay failure (merchant 4xx) — TERMINAL, never re-executed. */
+  | 'failed';
+
+/**
+ * ponytail: same plain time-lease the form-pending store uses (mirrors its 60s
+ * value + reclaim rule). A crash between {@link ParkedSessionStore.claim} and the
+ * terminal {@link ParkedSessionStore.markStatus} would otherwise strand a row in
+ * `processing` forever; a `processing` row older than LEASE_MS is reclaimable so a
+ * webhook retry re-drives the completion (the pinned idempotency-key makes the
+ * duplicate re-drive safe).
+ */
+const LEASE_MS = 60_000;
 
 export interface ParkedSession {
   /** AgentGate request.id — the webhook correlation key (PK). */
@@ -25,6 +43,8 @@ export interface ParkedSession {
   merchantBaseUrl: string;
   status: ParkedStatus;
   orderResult: unknown;
+  /** When the row was last moved to `processing` by {@link ParkedSessionStore.claim}. */
+  claimedAt?: string | undefined;
   createdAt: string;
   updatedAt: string;
 }
@@ -33,6 +53,15 @@ export interface ParkedSessionStore {
   put(session: ParkedSession): void;
   get(approvalId: string): ParkedSession | undefined;
   markStatus(approvalId: string, status: ParkedStatus, orderResult?: unknown): void;
+  /**
+   * Atomically transition a re-claimable row to `processing`, returning whether THIS
+   * call won it. The single conditional UPDATE is the concurrency primitive: of N
+   * simultaneous decision-webhook deliveries for one approvalId, exactly one wins,
+   * so a duplicate/at-least-once delivery can never double-replay the completion.
+   * Re-claimable ⇔ `pending`/`error` OR a crash-stranded `processing` row whose lease
+   * has expired. Terminal (`approved_replayed`/`denied`) rows are never claimable.
+   */
+  claim(approvalId: string): boolean;
 }
 
 /** Row shape as stored on disk (snake_case columns; JSON blobs as TEXT). */
@@ -46,6 +75,7 @@ interface ParkedRow {
   merchant_base_url: string;
   status: string;
   order_result: string | null;
+  claimed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -61,6 +91,7 @@ const CREATE_TABLE = `
     merchant_base_url TEXT NOT NULL,
     status            TEXT NOT NULL,
     order_result      TEXT,
+    claimed_at        TEXT,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL
   )
@@ -76,19 +107,34 @@ export function openParkedStore(sqlitePath: string): ParkedSessionStore {
   // the webhook path (which resumes them). No-op for an in-memory DB.
   db.pragma('journal_mode = WAL');
   db.exec(CREATE_TABLE);
+  // Migrate a pre-lease DB: add claimed_at if an older file is missing it.
+  try {
+    db.exec(`ALTER TABLE parked_sessions ADD COLUMN claimed_at TEXT`);
+  } catch {
+    /* column already exists — nothing to migrate */
+  }
 
   const putStmt = db.prepare(
     `INSERT OR REPLACE INTO parked_sessions
        (approval_id, checkout_id, idempotency_key, agent_id, mcp_session_id, checkout_snapshot,
-        merchant_base_url, status, order_result, created_at, updated_at)
+        merchant_base_url, status, order_result, claimed_at, created_at, updated_at)
      VALUES
        (@approval_id, @checkout_id, @idempotency_key, @agent_id, @mcp_session_id, @checkout_snapshot,
-        @merchant_base_url, @status, @order_result, @created_at, @updated_at)`
+        @merchant_base_url, @status, @order_result, @claimed_at, @created_at, @updated_at)`
   );
   const getStmt = db.prepare(`SELECT * FROM parked_sessions WHERE approval_id = ?`);
   const markStmt = db.prepare(
     `UPDATE parked_sessions SET status = @status, order_result = @order_result, updated_at = @updated_at
      WHERE approval_id = @approval_id`
+  );
+  // Atomic claim + reclaim: a pending/error row, OR a processing row whose lease has
+  // expired (crash-stranded), is moved to processing and its lease renewed. A fresh
+  // processing row (claimed_at >= @stale_before) is NOT matched — single-processor.
+  const claimStmt = db.prepare(
+    `UPDATE parked_sessions SET status = 'processing', claimed_at = @claimed_at, updated_at = @updated_at
+       WHERE approval_id = @approval_id
+         AND (status IN ('pending', 'error')
+              OR (status = 'processing' AND claimed_at < @stale_before))`
   );
 
   return {
@@ -107,6 +153,7 @@ export function openParkedStore(sqlitePath: string): ParkedSessionStore {
           session.orderResult === undefined || session.orderResult === null
             ? null
             : JSON.stringify(session.orderResult),
+        claimed_at: session.claimedAt ?? null,
         created_at: session.createdAt,
         updated_at: session.updatedAt,
       });
@@ -125,6 +172,7 @@ export function openParkedStore(sqlitePath: string): ParkedSessionStore {
         merchantBaseUrl: row.merchant_base_url,
         status: row.status as ParkedStatus,
         orderResult: row.order_result === null ? null : JSON.parse(row.order_result),
+        claimedAt: row.claimed_at ?? undefined,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       };
@@ -140,6 +188,19 @@ export function openParkedStore(sqlitePath: string): ParkedSessionStore {
             : JSON.stringify(orderResult),
         updated_at: new Date().toISOString(),
       });
+    },
+
+    claim(approvalId: string): boolean {
+      const now = Date.now();
+      const info = claimStmt.run({
+        approval_id: approvalId,
+        claimed_at: new Date(now).toISOString(),
+        updated_at: new Date(now).toISOString(),
+        // ISO-8601 UTC strings sort lexicographically, so a plain `<` compares the
+        // stored claim time against the lease horizon without any date parsing.
+        stale_before: new Date(now - LEASE_MS).toISOString(),
+      });
+      return info.changes > 0;
     },
   };
 }

@@ -28,10 +28,13 @@ resolves) instead of a completed order.
 npx @agentkitai/agentgate-ucp        # run the gate (or: npm i -g @agentkitai/agentgate-ucp)
 ```
 
-Configure via environment (see [`.env.example`](.env.example)) — at minimum
-`MERCHANT_URL`, `AGENTGATE_URL`, `AGENTGATE_API_KEY`; FormBridge and AgentLens are
-optional (unset each and that seam passes through). Then point your agent's MCP
-client at `$PUBLIC_URL/mcp` (default `http://localhost:8787/mcp`).
+Configure via environment (see [`.env.example`](.env.example)) — required:
+`MCP_AUTH_TOKEN` (the bearer token agents present on `/mcp`), `MERCHANT_URL`,
+`AGENTGATE_URL`, `AGENTGATE_API_KEY`, and `AGENTGATE_WEBHOOK_SECRET` (the decision
+webhook moves money, so it must be signed). FormBridge and AgentLens are optional
+(unset each and that seam passes through). Then point your agent's MCP client at
+`$PUBLIC_URL/mcp` (default `http://localhost:8787/mcp`) with
+`Authorization: Bearer $MCP_AUTH_TOKEN`.
 
 ## What it does — three gate points
 
@@ -105,14 +108,22 @@ See [`demo/README.md`](demo/README.md) for the topology and the recorded
 
 ## Security posture
 
-- **Authoritative amounts.** The spend gate reads totals from the merchant, never
-  from the agent-supplied object; a buyer's form answer that changes the total is
-  re-gated on the re-drive.
-- **Fail-closed webhooks.** The AgentGate and FormBridge webhooks are HMAC-verified
-  over the raw body; the answer-back route (which re-drives a payment) is *only
-  registered when a webhook secret is set* — no unsigned re-drive is possible.
+- **Authenticated endpoint.** `/mcp` requires a bearer `MCP_AUTH_TOKEN` — an
+  unauthenticated request never reaches the merchant. The gate refuses to start
+  without the token.
+- **Authoritative amounts, fail-closed.** The spend gate reads totals from the
+  merchant, never from the agent-supplied object; a checkout with no valid grand
+  total is *refused*, not gated as $0. The approved total is re-checked immediately
+  before the charge (an ungated `update_checkout` can't slip a pricier cart past the
+  gate), and a buyer's form answer that changes the total is re-gated on the re-drive.
+- **Fail-closed webhooks (both).** The AgentGate *and* FormBridge webhooks are
+  HMAC-verified over the raw body, are *only registered when their secret is set*,
+  and the gate refuses to start without them — no unsigned decision or answer-back
+  can move money.
 - **At-least-once + tamper safe.** Parked completions replay the stored snapshot
-  with the pinned idempotency key, not the webhook's params.
+  with the pinned idempotency key, not the webhook's params, and are resumed via an
+  *atomic claim* (with a crash-recovery lease) so a duplicate delivery can't
+  double-place and a mid-replay crash can't strand a human-approved order.
 - **Hardened JSONPath.** Buyer-input answers write to exactly one concrete
   location; `__proto__`/`constructor`/`prototype` and wildcard/filter/negative-index
   paths are rejected (no prototype pollution, no fan-out).
@@ -126,10 +137,10 @@ gpt-5.5) — 30+ findings fixed before release, each with a regression test.
 
 ```bash
 npm install
-cp .env.example .env     # MERCHANT_URL / AGENTGATE_URL / AGENTGATE_API_KEY required; the rest optional
+cp .env.example .env     # MCP_AUTH_TOKEN / MERCHANT_URL / AGENTGATE_URL / AGENTGATE_API_KEY / AGENTGATE_WEBHOOK_SECRET required
 npm run dev              # gate on :8787, MCP at /mcp
 npm run typecheck
-npm test                 # 132 tests
+npm test                 # 151 tests
 npm run build && node dist/index.js
 ```
 

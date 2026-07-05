@@ -60,6 +60,8 @@ AGENTLENS_API_KEY="${AGENTLENS_API_KEY:-}"
 AGENTLENS_AGENT_TOKEN="${AGENTLENS_AGENT_TOKEN:-}"
 # Shared HMAC secret: FormBridge signs the answer-back webhook, the gate verifies it.
 FORMBRIDGE_WEBHOOK_SECRET="${FORMBRIDGE_WEBHOOK_SECRET:-$(node -e 'console.log(require("crypto").randomBytes(24).toString("hex"))')}"
+# Bearer token the buying agent presents on /mcp (the gate now REQUIRES /mcp auth).
+MCP_AUTH_TOKEN="${MCP_AUTH_TOKEN:-$(node -e 'console.log(require("crypto").randomBytes(24).toString("hex"))')}"
 # The gate's registered answer-back webhook URL. Plain loopback — FormBridge accepts
 # it because we run FormBridge with FORMBRIDGE_ALLOW_PRIVATE_WEBHOOKS=1 (dev flag).
 GATE_PUBLIC_URL="http://127.0.0.1:$GATE_PORT"
@@ -200,6 +202,7 @@ echo "── starting the gate on :$GATE_PORT ──"
 ( cd "$ADAPTER_DIR" && \
   PORT=$GATE_PORT \
   PUBLIC_URL="$GATE_PUBLIC_URL" \
+  MCP_AUTH_TOKEN="$MCP_AUTH_TOKEN" \
   MERCHANT_URL="http://localhost:$MERCHANT_PORT" \
   AGENTGATE_URL="http://localhost:$AGENTGATE_PORT" \
   AGENTGATE_API_KEY="$ADMIN_KEY" \
@@ -218,6 +221,7 @@ wait_http "http://localhost:$GATE_PORT/health" gate || { tail -20 "$WORKDIR/gate
 echo "── running demo/buy.ts (transcript → $TRANSCRIPT) ──"
 ( cd "$ADAPTER_DIR" && \
   GATE_URL="http://localhost:$GATE_PORT" \
+  MCP_AUTH_TOKEN="$MCP_AUTH_TOKEN" \
   AGENTGATE_URL="http://localhost:$AGENTGATE_PORT" \
   AGENTGATE_API_KEY="$ADMIN_KEY" \
   AGENTLENS_URL="$AGENTLENS_URL" \

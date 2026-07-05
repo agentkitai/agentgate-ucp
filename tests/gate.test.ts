@@ -259,6 +259,114 @@ describe('gateCompleteCheckout — pending parks a row (task #10)', () => {
   });
 });
 
+describe('gateCompleteCheckout — re-binds the gated total to the charge (finding H2)', () => {
+  it('REFUSES to complete when the total changed between the gate GET and the charge', async () => {
+    // getCheckout returns 5000 the first time (gated), 500000 on the pre-charge recheck
+    // (a concurrent ungated update_checkout mutated the cart during the eval window).
+    let n = 0;
+    const totals = [5000, 500000];
+    const calls: string[] = [];
+    const merchant = {
+      base: 'https://merchant.example',
+      getCheckout() {
+        calls.push('getCheckout');
+        const amount = totals[Math.min(n++, totals.length - 1)]!;
+        return Promise.resolve<Checkout>({
+          id: 'co_9',
+          status: 'ready_for_complete',
+          currency: 'USD',
+          totals: [{ type: 'total', amount }],
+          line_items: [{ id: 'li_1' }],
+        });
+      },
+      completeCheckout() {
+        calls.push('completeCheckout');
+        return Promise.resolve<Checkout>({ id: 'co_9', status: 'completed' });
+      },
+    } as unknown as MerchantClient;
+    const { gate } = makeStubGate({ status: 'approved' }); // gate approved the 5000 cart
+
+    const res = await gateCompleteCheckout(merchant, gate, {
+      meta: AGENT_META,
+      id: 'co_9',
+      checkout: {},
+    });
+
+    // The order is NOT placed: the drift from the approved total is caught pre-charge.
+    expect(calls).not.toContain('completeCheckout');
+    expect(res.isError).toBe(true);
+    expect((res.content?.[0] as { text?: string } | undefined)?.text).toMatch(/changed after/);
+  });
+
+  it('REFUSES on a currency/line-item swap that preserves the total (all facts compared)', async () => {
+    // Same total on both GETs, but the currency changes — a cart the gate never saw.
+    let n = 0;
+    const currencies = ['USD', 'JPY'];
+    const calls: string[] = [];
+    const merchant = {
+      base: 'https://merchant.example',
+      getCheckout() {
+        calls.push('getCheckout');
+        return Promise.resolve<Checkout>({
+          id: 'co_9',
+          status: 'ready_for_complete',
+          currency: currencies[Math.min(n++, 1)]!,
+          totals: [{ type: 'total', amount: 5000 }], // total UNCHANGED
+          line_items: [{ id: 'li_1' }],
+        });
+      },
+      completeCheckout() {
+        calls.push('completeCheckout');
+        return Promise.resolve<Checkout>({ id: 'co_9', status: 'completed' });
+      },
+    } as unknown as MerchantClient;
+    const { gate } = makeStubGate({ status: 'approved' });
+
+    const res = await gateCompleteCheckout(merchant, gate, { meta: AGENT_META, id: 'co_9', checkout: {} });
+    expect(calls).not.toContain('completeCheckout');
+    expect(res.isError).toBe(true);
+  });
+
+  it('SURFACES (not errors) when the checkout escalates during the eval window', async () => {
+    // First GET is completable; the pre-charge recheck finds a buyer-input escalation.
+    let n = 0;
+    const calls: string[] = [];
+    const merchant = {
+      base: 'https://merchant.example',
+      getCheckout() {
+        calls.push('getCheckout');
+        if (n++ === 0) {
+          return Promise.resolve<Checkout>({
+            id: 'co_9',
+            status: 'ready_for_complete',
+            currency: 'USD',
+            totals: [{ type: 'total', amount: 5000 }],
+            line_items: [{ id: 'li_1' }],
+          });
+        }
+        return Promise.resolve<Checkout>({
+          id: 'co_9',
+          status: 'requires_escalation',
+          messages: [
+            { type: 'error', code: 'buyer_input_required', severity: 'requires_buyer_input', path: '$.buyer.phone_number' },
+          ],
+        });
+      },
+      completeCheckout() {
+        calls.push('completeCheckout');
+        return Promise.resolve<Checkout>({ id: 'co_9', status: 'completed' });
+      },
+    } as unknown as MerchantClient;
+    const { gate } = makeStubGate({ status: 'approved' });
+
+    const res = await gateCompleteCheckout(merchant, gate, { meta: AGENT_META, id: 'co_9', checkout: {} });
+    // No order placed, and it is surfaced as an escalation — NOT an opaque MCP error.
+    expect(calls).not.toContain('completeCheckout');
+    expect(res.isError).toBeFalsy();
+    expect((res.structuredContent as Checkout).status).toBe('requires_escalation');
+  });
+});
+
 describe('createGateServer with a gate (end-to-end over MCP)', () => {
   it('routes complete_checkout through the gate; leaves other tools as passthrough', async () => {
     const { merchant, calls: mCalls } = makeStubMerchant(MERCHANT_CHECKOUT);

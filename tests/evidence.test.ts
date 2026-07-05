@@ -5,6 +5,8 @@
  * plus the load-bearing FAIL-OPEN guarantee: a recorder that throws or rejects
  * must never change the tool result.
  */
+import { createHmac } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 
 import type { Gate, GateContext, GateDecision } from '../src/gate/agentgate.js';
@@ -250,6 +252,12 @@ function envelope(event: 'request.approved' | 'request.denied', requestId: strin
   });
 }
 
+/** The decision webhook is fail-closed: deliveries must be HMAC-signed. */
+const WH_SECRET = 'whsec_evidence';
+function sign(rawBody: string): string {
+  return createHmac('sha256', WH_SECRET).update(rawBody).digest('hex');
+}
+
 function seedPending(store = openParkedStore(':memory:')) {
   store.put({
     approvalId: 'req_1',
@@ -282,10 +290,11 @@ describe('evidence — handleDecisionWebhook (approved replay)', () => {
     const { recorder, events } = makeStubRecorder();
     const store = seedPending();
 
+    const body = envelope('request.approved', 'req_1');
     const result = await handleDecisionWebhook(
-      { store, merchant: webhookMerchant(), webhookSecret: undefined, recorder },
-      envelope('request.approved', 'req_1'),
-      undefined
+      { store, merchant: webhookMerchant(), webhookSecret: WH_SECRET, recorder },
+      body,
+      sign(body)
     );
 
     expect(result.outcome).toBe('approved_replayed');
@@ -313,16 +322,45 @@ describe('evidence — handleDecisionWebhook (denied)', () => {
     const { recorder, events } = makeStubRecorder();
     const store = seedPending();
 
+    const body = envelope('request.denied', 'req_1');
     const result = await handleDecisionWebhook(
-      { store, merchant: webhookMerchant(), webhookSecret: undefined, recorder },
-      envelope('request.denied', 'req_1'),
-      undefined
+      { store, merchant: webhookMerchant(), webhookSecret: WH_SECRET, recorder },
+      body,
+      sign(body)
     );
 
     expect(result.outcome).toBe('denied');
     expect(events).toHaveLength(1);
     expect(events[0]!.payload.type).toBe('ucp.order.webhook_denied');
     expect(events[0]!.payload.data).toMatchObject({ agentgateRequestId: 'req_1' });
+  });
+});
+
+describe('evidence — placed-order labelling is honest (finding M4)', () => {
+  it('a non-completed merchant status is recorded as unexpected_status, NOT ucp.order.placed', async () => {
+    const { recorder, events } = makeStubRecorder();
+    // Gate approved, but the merchant answers the completion with a failed status.
+    const merchant = {
+      base: 'https://merchant.example',
+      getCheckout: () => Promise.resolve(MERCHANT_CHECKOUT),
+      completeCheckout: (id: string) =>
+        Promise.resolve<Checkout>({ id, status: 'payment_failed' as Checkout['status'] }),
+    } as unknown as MerchantClient;
+
+    await gateCompleteCheckout(
+      merchant,
+      makeStubGate({ status: 'approved' }),
+      { meta: AGENT_META, id: 'co_9', checkout: {} },
+      {},
+      undefined,
+      recorder
+    );
+
+    const types = events.map((e) => e.payload.type);
+    expect(types).toContain('ucp.order.unexpected_status');
+    expect(types).not.toContain('ucp.order.placed'); // never forge a placed order
+    const ev = events.find((e) => e.payload.type === 'ucp.order.unexpected_status')!;
+    expect(ev.payload.data).toMatchObject({ status: 'payment_failed' });
   });
 });
 
@@ -368,10 +406,11 @@ describe('evidence — fail-open: a broken recorder never breaks the checkout', 
 
   it('webhook replay still places the order when the recorder THROWS', async () => {
     const store = seedPending();
+    const body = envelope('request.approved', 'req_1');
     const result = await handleDecisionWebhook(
-      { store, merchant: webhookMerchant(), webhookSecret: undefined, recorder: throwingRecorder },
-      envelope('request.approved', 'req_1'),
-      undefined
+      { store, merchant: webhookMerchant(), webhookSecret: WH_SECRET, recorder: throwingRecorder },
+      body,
+      sign(body)
     );
     expect(result.outcome).toBe('approved_replayed');
     expect(store.get('req_1')?.status).toBe('approved_replayed');

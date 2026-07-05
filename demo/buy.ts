@@ -48,6 +48,9 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 const GATE_URL = (process.env.GATE_URL ?? 'http://localhost:8787').replace(/\/+$/, '');
+// The gate REQUIRES /mcp auth: present the shared bearer token on every MCP request.
+// Read the documented MCP_AUTH_TOKEN (GATE_AUTH_TOKEN kept as a legacy alias).
+const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN ?? process.env.GATE_AUTH_TOKEN ?? '';
 const AGENTGATE_URL = (process.env.AGENTGATE_URL ?? 'http://localhost:4000').replace(/\/+$/, '');
 const AGENTGATE_API_KEY = process.env.AGENTGATE_API_KEY ?? '';
 // AgentLens is optional — the evidence beat is skipped gracefully when unset/unreachable.
@@ -105,7 +108,11 @@ function unwrap(res: CallToolResult, tool: string): Checkout {
 
 async function connect(): Promise<Client> {
   const client = new Client({ name: 'unattended-buying-agent', version: '1.0.0' });
-  const transport = new StreamableHTTPClientTransport(new URL(`${GATE_URL}/mcp`));
+  const transport = new StreamableHTTPClientTransport(new URL(`${GATE_URL}/mcp`), {
+    requestInit: MCP_AUTH_TOKEN
+      ? { headers: { Authorization: `Bearer ${MCP_AUTH_TOKEN}` } }
+      : undefined,
+  });
   await client.connect(transport);
   return client;
 }

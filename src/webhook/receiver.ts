@@ -13,6 +13,7 @@
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
+import { isRetryableMerchantError } from '../merchant/client.js';
 import type { MerchantClient } from '../merchant/client.js';
 import type { EvidenceRecorder } from '../observability/agentlens.js';
 import { recordGateEvent } from '../observability/agentlens.js';
@@ -63,6 +64,13 @@ export type WebhookOutcome =
 export interface WebhookResult {
   outcome: WebhookOutcome;
   reason?: string;
+  /**
+   * True when the failure is transient (the merchant replay threw): the route maps
+   * it to a non-2xx so AgentGate RETRIES the delivery. The parked row is left
+   * re-claimable (`error`) so the retry re-drives the completion — a mid-replay
+   * merchant blip must never permanently strand a human-approved order.
+   */
+  retryable?: boolean;
 }
 
 /** Constant-time compare of the received signature against the recomputed HMAC hex. */
@@ -103,16 +111,14 @@ export async function handleDecisionWebhook(
 ): Promise<WebhookResult> {
   const { store, merchant, webhookSecret, recorder } = deps;
 
-  // 1. Verify the HMAC signature. When no secret is configured we proceed in a
-  //    clearly-signalled dev mode (the outcome enum lets the caller distinguish).
-  if (webhookSecret) {
-    if (!signatureMatches(webhookSecret, rawBody, signature)) {
-      return { outcome: 'rejected', reason: 'invalid or missing X-AgentGate-Signature' };
-    }
-  } else {
-    console.warn(
-      '[agentgate-ucp] AGENTGATE_WEBHOOK_SECRET is unset — accepting webhook WITHOUT signature verification (dev mode)'
-    );
+  // 1. Verify the HMAC signature — ALWAYS, fail CLOSED. This endpoint re-drives a
+  //    real (over-policy) completion, so an unsigned or unverifiable delivery is
+  //    rejected. With NO secret configured there is nothing to verify against, so we
+  //    reject rather than accept: there is NO dev-mode / no-secret bypass. (The route
+  //    is also only registered when a secret is set — see createApp — and config
+  //    refuses to start without one; this is the innermost of those three guards.)
+  if (!webhookSecret || !signatureMatches(webhookSecret, rawBody, signature)) {
+    return { outcome: 'rejected', reason: 'invalid or missing X-AgentGate-Signature' };
   }
 
   // 2. Parse the envelope: { event, data: { request } }.
@@ -140,15 +146,23 @@ export async function handleDecisionWebhook(
   }
   const requestId = req.id;
 
-  // 3. Correlate on request.id. No row → nothing parked here → ignore.
+  // 3. Only two events resolve a parked row; anything else is a no-op (no claim).
+  if (event !== 'request.approved' && event !== 'request.denied') {
+    return { outcome: 'ignored', reason: `unhandled event ${event}` };
+  }
+
+  // 4. ATOMICALLY claim the row (pending/error/stale-processing → processing). Of N
+  //    concurrent or at-least-once redelivered webhooks for one requestId exactly one
+  //    wins the claim; a terminal or in-flight row is not claimable. This atomic
+  //    transition — NOT a read-then-check — is what prevents a double replay.
+  if (!store.claim(requestId)) {
+    const existing = store.get(requestId);
+    if (!existing) return { outcome: 'ignored', reason: 'no parked session for request id' };
+    return { outcome: 'ignored', reason: `not claimable (${existing.status})` };
+  }
   const row = store.get(requestId);
   if (!row) {
     return { outcome: 'ignored', reason: 'no parked session for request id' };
-  }
-  // Status guard: a non-pending row was already resolved by an earlier delivery.
-  // At-least-once webhooks retry, so this is the line that prevents a double replay.
-  if (row.status !== 'pending') {
-    return { outcome: 'ignored', reason: `already resolved (${row.status})` };
   }
 
   // Normalize params and best-effort sanity-check correlation (never fatal).
@@ -175,7 +189,7 @@ export async function handleDecisionWebhook(
     source: EVIDENCE_SOURCE,
   };
 
-  // 4. Resolve. Replay uses the STORED snapshot + original idempotency-key so the
+  // 5. Resolve. Replay uses the STORED snapshot + original idempotency-key so the
   //    merchant treats a retried delivery as the same request (idempotent).
   if (event === 'request.approved') {
     try {
@@ -197,8 +211,19 @@ export async function handleDecisionWebhook(
       });
       return { outcome: 'approved_replayed' };
     } catch (err) {
-      store.markStatus(requestId, 'error');
-      return { outcome: 'error', reason: err instanceof Error ? err.message : String(err) };
+      // A TRANSIENT failure (network / 5xx / 429 / 408) → row stays re-claimable
+      // (`error`) and we signal a retry (5xx) so AgentGate redelivers and the
+      // human-approved order is re-driven (the pinned idempotency-key makes that safe).
+      // A PERMANENT merchant 4xx (invalid payment, canceled, idempotency conflict) can
+      // never succeed → mark the row TERMINAL (`failed`) so even a redelivery (e.g. a
+      // lost 200 ack) can't re-execute it, and ack (retryable:false → 200) to stop the loop.
+      const retryable = isRetryableMerchantError(err);
+      store.markStatus(requestId, retryable ? 'error' : 'failed');
+      return {
+        outcome: 'error',
+        retryable,
+        reason: err instanceof Error ? err.message : String(err),
+      };
     }
   }
 
@@ -215,6 +240,8 @@ export async function handleDecisionWebhook(
     return { outcome: 'denied' };
   }
 
-  // A pending row, but an event we don't act on → leave it pending, ignore.
-  return { outcome: 'ignored', reason: `unhandled event ${event}` };
+  // Unreachable: unhandled events are filtered before the claim (step 3). Kept as a
+  // defensive terminal so the row (already claimed → processing) is never left dangling.
+  store.markStatus(requestId, 'error');
+  return { outcome: 'ignored', reason: `unhandled event ${String(event)}` };
 }

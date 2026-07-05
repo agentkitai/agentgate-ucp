@@ -2,14 +2,36 @@ import { describe, expect, it } from 'vitest';
 
 import { loadConfig } from '../src/config.js';
 
-/** A minimal, valid base environment (the three required vars). */
+/** A minimal, valid base environment (the required vars). */
 function baseEnv(): NodeJS.ProcessEnv {
   return {
+    MCP_AUTH_TOKEN: 'mcp-token',
     MERCHANT_URL: 'http://localhost:3100',
     AGENTGATE_URL: 'http://localhost:4000',
     AGENTGATE_API_KEY: 'replace-me',
+    AGENTGATE_WEBHOOK_SECRET: 'whsec_agentgate',
   } as NodeJS.ProcessEnv;
 }
+
+describe('loadConfig — money-path secrets are REQUIRED (fail-closed)', () => {
+  it('THROWS when MCP_AUTH_TOKEN is missing (/mcp must be authenticated)', () => {
+    const env = baseEnv();
+    delete env['MCP_AUTH_TOKEN'];
+    expect(() => loadConfig(env)).toThrow(/MCP_AUTH_TOKEN/);
+  });
+
+  it('THROWS when AGENTGATE_WEBHOOK_SECRET is missing (decision webhook re-drives money)', () => {
+    const env = baseEnv();
+    delete env['AGENTGATE_WEBHOOK_SECRET'];
+    expect(() => loadConfig(env)).toThrow(/AGENTGATE_WEBHOOK_SECRET/);
+  });
+
+  it('loads with all required vars set', () => {
+    const config = loadConfig(baseEnv());
+    expect(config.mcpAuthToken).toBe('mcp-token');
+    expect(config.agentgateWebhookSecret).toBe('whsec_agentgate');
+  });
+});
 
 describe('loadConfig — FormBridge fail-closed (finding #7)', () => {
   it('THROWS when FORMBRIDGE_URL is set but FORMBRIDGE_WEBHOOK_SECRET is missing', () => {
