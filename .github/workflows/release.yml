@@ -1,0 +1,32 @@
+name: Release
+
+# Publishes @agentkitai/agentgate-ucp to npm on a `vX.Y.Z` tag via OIDC
+# trusted publishing — no NPM_TOKEN secret. The trusted publisher on
+# npmjs.com must point at this repo + release.yml (same pattern as agentlens).
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write # OIDC trusted publishing
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No registry-url here on purpose: setup-node would write an .npmrc with a
+      # `${NODE_AUTH_TOKEN}` placeholder that breaks OIDC auth (404).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # Trusted publishing needs npm CLI >= 11.5.1
+      - run: npm install -g npm@latest
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:run
+      # prepublishOnly runs the build; provenance is automatic under OIDC
+      - run: npm publish
