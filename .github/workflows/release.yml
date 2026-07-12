@@ -16,7 +16,7 @@ jobs:
   npm:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # No registry-url here on purpose: setup-node would write an .npmrc with a
       # `${NODE_AUTH_TOKEN}` placeholder that breaks OIDC auth (404).
       - uses: actions/setup-node@v6
