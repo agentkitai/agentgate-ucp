@@ -39,7 +39,7 @@
   ],
   "dependencies": {
     "@agentkitai/agentgate-sdk": "^0.1.0",
-    "@apidevtools/json-schema-ref-parser": "^15.4.0",
+    "@apidevtools/json-schema-ref-parser": "^16.0.3",
     "@hono/node-server": "^2.0.8",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "better-sqlite3": "^13.0.2",
